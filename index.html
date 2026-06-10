@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROMA PlayStation | روما بلاي ستيشن</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&family=Orbitron:wght@700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <a href="#" class="logo">R<span>O</span>MA</a>
+            <ul class="nav-links">
+                <li><a href="#home">الرئيسية</a></li>
+                <li><a href="#consoles">الأجهزة المتاحة</a></li>
+                <li><a href="#booking">احجز الآن</a></li>
+                <li><a href="#info">مواعيد العمل</a></li>
+            </ul>
+            <div class="hamburger">
+                <i class="fas fa-bars"></i>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header id="home" class="hero">
+        <div class="hero-content">
+            <h1>عِش التحدي في <span class="highlight">ROMA</span></h1>
+            <p>أفضل تجربة بلاي ستيشن 4 و 5 في أجواء خرافية، احجز مكانك الآن واستعد للمنافسة.</p>
+            <a href="#booking" class="btn btn-primary">احجز جهازك <i class="fab fa-whatsapp"></i></a>
+        </div>
+        <div class="hero-bg-glow"></div>
+    </header>
+
+    <!-- Consoles Section -->
+    <section id="consoles" class="section">
+        <div class="container">
+            <h2 class="section-title">الأجهزة وحالة التوفر</h2>
+            <p class="section-subtitle">شاهد الأجهزة المتاحة حالياً في المكان</p>
+            
+            <div class="consoles-grid" id="consoles-container">
+                <!-- Injected via script.js -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Booking Section -->
+    <section id="booking" class="section bg-darker">
+        <div class="container">
+            <div class="booking-wrapper">
+                <div class="booking-info">
+                    <h2>احجز عن طريق الواتساب</h2>
+                    <p>قم بتحديد تفاصيل حجزك وسنقوم بتحويلك مباشرة إلى الواتساب لتأكيد الحجز مع الإدارة.</p>
+                    <ul class="features">
+                        <li><i class="fas fa-check-circle"></i> تأكيد فوري</li>
+                        <li><i class="fas fa-check-circle"></i> غرف VIP متوفرة</li>
+                        <li><i class="fas fa-check-circle"></i> أسعار مميزة</li>
+                    </ul>
+                </div>
+                <div class="booking-form-card glass-panel">
+                    <form id="whatsapp-booking-form">
+                        <div class="form-group">
+                            <label for="name">الاسم</label>
+                            <input type="text" id="name" required placeholder="أدخل اسمك">
+                        </div>
+                        <div class="form-group">
+                            <label for="device-type">نوع الجهاز</label>
+                            <select id="device-type" required>
+                                <option value="PS5">PlayStation 5</option>
+                                <option value="PS4">PlayStation 4</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="room-type">المكان</label>
+                            <select id="room-type" required>
+                                <option value="Main Hall">الصالة الرئيسية</option>
+                                <option value="VIP Room">غرفة VIP</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="time">وقت الحجز المتوقع</label>
+                            <input type="time" id="time" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block">تأكيد عبر الواتساب <i class="fab fa-whatsapp"></i></button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer & Info Section -->
+    <footer id="info" class="footer">
+        <div class="container footer-content">
+            <div class="footer-col">
+                <h3 class="logo">R<span>O</span>MA</h3>
+                <p>وجهتك الأولى للترفيه والألعاب.</p>
+            </div>
+            <div class="footer-col">
+                <h3>مواعيد العمل</h3>
+                <ul class="working-hours">
+                    <li><i class="fas fa-clock"></i> مفتوح يومياً</li>
+                    <li><i class="fas fa-sun"></i> من الساعة: 12:00 ظهراً</li>
+                    <li><i class="fas fa-moon"></i> إلى الساعة: 03:00 فجراً</li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>تواصل معنا</h3>
+                <div class="social-links">
+                    <a href="#"><i class="fab fa-facebook-f"></i></a>
+                    <a href="#"><i class="fab fa-instagram"></i></a>
+                    <a href="#"><i class="fab fa-whatsapp"></i></a>
+                </div>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>جميع الحقوق محفوظة &copy; 2026 ROMA PlayStation</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
