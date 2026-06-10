@@ -67,7 +67,7 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script type="module" src="script.js"></script>
     <script>
         // Simple password protection simulation
         document.addEventListener('DOMContentLoaded', () => {
@@ -76,44 +76,11 @@
                 document.body.innerHTML = "<h2 style='text-align:center; margin-top: 50px; color: red;'>عذراً، كلمة المرور غير صحيحة ولا يمكنك الدخول.</h2>";
                 return;
             }
-            renderAdminConsoles();
+            window.isAdminAuthenticated = true;
+            if (typeof window.renderAdminConsoles === 'function') {
+                window.renderAdminConsoles();
+            }
         });
-
-        function renderAdminConsoles() {
-            const container = document.getElementById('admin-devices-list');
-            if (!container) return;
-
-            const consoles = getConsoles();
-            container.innerHTML = '';
-
-            consoles.forEach((c, index) => {
-                const row = document.createElement('div');
-                row.className = 'device-row';
-                
-                const statusBadge = c.status === 'available' ? 
-                    '<span style="color:var(--success)">متاح</span>' : 
-                    '<span style="color:var(--danger)">مشغول</span>';
-
-                row.innerHTML = `
-                    <div class="device-info">
-                        <strong>${c.name} (${c.type})</strong>
-                        <small class="text-muted">${c.location} - الحالة الحالية: ${statusBadge}</small>
-                    </div>
-                    <div class="controls">
-                        <button class="btn btn-small btn-success" onclick="updateStatus(${index}, 'available')">تعيين كمتاح</button>
-                        <button class="btn btn-small btn-danger" onclick="updateStatus(${index}, 'busy')">تعيين كمشغول</button>
-                    </div>
-                `;
-                container.appendChild(row);
-            });
-        }
-
-        function updateStatus(index, newStatus) {
-            const consoles = getConsoles();
-            consoles[index].status = newStatus;
-            localStorage.setItem('roma_consoles', JSON.stringify(consoles));
-            renderAdminConsoles(); // Re-render admin
-        }
     </script>
 </body>
 </html>
