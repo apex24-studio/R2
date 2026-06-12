@@ -98,10 +98,18 @@ onValue(bookingsRef, (snapshot) => {
 
 function renderConsoles() {
     const container = document.getElementById('consoles-container');
+    const specificDeviceSelect = document.getElementById('specific-device');
+    
+    if (specificDeviceSelect) {
+        // Keep the first option
+        specificDeviceSelect.innerHTML = '<option value="any">أي جهاز متاح</option>';
+    }
+
     if (!container) return;
 
     container.innerHTML = '';
     globalConsoles.forEach(c => {
+        if (!c) return; // safety check
         const isPS5 = c.type === 'PS5';
         const iconClass = isPS5 ? 'fa-gamepad ps5-icon' : 'fa-gamepad ps4-icon';
         const statusClass = c.status === 'available' ? 'status-available' : 'status-busy';
@@ -121,6 +129,30 @@ function renderConsoles() {
             ${timerDisplay}
         `;
         container.appendChild(card);
+    });
+    
+    // Also update the dropdown
+    updateSpecificDeviceDropdown();
+}
+
+function updateSpecificDeviceDropdown() {
+    const specificDeviceSelect = document.getElementById('specific-device');
+    const deviceTypeSelect = document.getElementById('device-type');
+    
+    if (!specificDeviceSelect || !deviceTypeSelect) return;
+    
+    const selectedType = deviceTypeSelect.value;
+    specificDeviceSelect.innerHTML = '<option value="any">أي جهاز متاح</option>';
+    
+    globalConsoles.forEach(c => {
+        if (c && c.type === selectedType) {
+            const option = document.createElement('option');
+            option.value = c.name;
+            // Show status in dropdown for better UX
+            const statusText = c.status === 'available' ? 'متاح' : 'مشغول';
+            option.textContent = `${c.name} - ${c.location} (${statusText})`;
+            specificDeviceSelect.appendChild(option);
+        }
     });
 }
 
@@ -149,7 +181,18 @@ setInterval(() => {
                     update(ref(db, `bookings/${b.id}`), { status: 'cancelled_noshow' });
                 } else if (now >= b.startTime) {
                     // Time to start! Find an available device of the requested type
-                    const availableConsoleIndex = globalConsoles.findIndex(c => c.type === b.deviceType && c.status === 'available');
+                    let availableConsoleIndex = -1;
+                    
+                    if (b.specificDevice && b.specificDevice !== 'any') {
+                        // Priority to the specific device
+                        availableConsoleIndex = globalConsoles.findIndex(c => c.name === b.specificDevice && c.status === 'available');
+                    }
+                    
+                    // Fallback to any available if specific wasn't chosen or isn't available
+                    if (availableConsoleIndex === -1) {
+                         availableConsoleIndex = globalConsoles.findIndex(c => c.type === b.deviceType && c.status === 'available');
+                    }
+                    
                     if (availableConsoleIndex !== -1) {
                         // Start timer for half the duration (since they paid half)
                         const durationMs = (b.duration / 2) * 60 * 60 * 1000;
@@ -278,6 +321,7 @@ window.renderAdminBookings = function() {
         card.innerHTML = `
             <h4>${b.name} - ${b.deviceType} (${b.duration} ساعة)</h4>
             <p><strong>الوقت:</strong> ${dateStr}</p>
+            <p><strong>الجهاز المطلوب:</strong> ${b.specificDevice && b.specificDevice !== 'any' ? b.specificDevice : 'أي جهاز متاح'}</p>
             <p><strong>طريقة الدفع:</strong> ${b.paymentMethod} - <strong>العربون:</strong> ${b.depositAmount} جنيه</p>
             <p><strong>الحالة:</strong> ${statusMap[b.status] || b.status}</p>
             
@@ -337,6 +381,28 @@ if (logoutBtn) {
     });
 }
 
+// Admin Tabs Logic
+const devicesTabBtn = document.getElementById('devices-tab-btn');
+const bookingsTabBtn = document.getElementById('bookings-tab-btn');
+const devicesTab = document.getElementById('devices-tab');
+const bookingsTab = document.getElementById('bookings-tab');
+
+if (devicesTabBtn && bookingsTabBtn) {
+    devicesTabBtn.addEventListener('click', () => {
+        devicesTab.style.display = 'block';
+        bookingsTab.style.display = 'none';
+        devicesTabBtn.classList.add('active-tab');
+        bookingsTabBtn.classList.remove('active-tab');
+    });
+
+    bookingsTabBtn.addEventListener('click', () => {
+        devicesTab.style.display = 'none';
+        bookingsTab.style.display = 'block';
+        bookingsTabBtn.classList.add('active-tab');
+        devicesTabBtn.classList.remove('active-tab');
+    });
+}
+
 // --- Settings Placeholders ---
 const PRICES = {
     PS4: 40, // جنيه/ساعة (Placeholder)
@@ -377,8 +443,18 @@ if (paymentMethodSelect) {
     });
     
     // Update instructions if device or duration changes
-    document.getElementById('device-type').addEventListener('change', () => paymentMethodSelect.dispatchEvent(new Event('change')));
-    document.getElementById('duration').addEventListener('input', () => paymentMethodSelect.dispatchEvent(new Event('change')));
+    const deviceTypeSelect = document.getElementById('device-type');
+    if (deviceTypeSelect) {
+        deviceTypeSelect.addEventListener('change', () => {
+            paymentMethodSelect.dispatchEvent(new Event('change'));
+            updateSpecificDeviceDropdown();
+        });
+    }
+    
+    const durationInput = document.getElementById('duration');
+    if (durationInput) {
+        durationInput.addEventListener('input', () => paymentMethodSelect.dispatchEvent(new Event('change')));
+    }
 }
 
 import { push, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
@@ -389,6 +465,7 @@ if (bookingForm) {
         e.preventDefault();
         const name = document.getElementById('name').value;
         const deviceType = document.getElementById('device-type').value;
+        const specificDevice = document.getElementById('specific-device') ? document.getElementById('specific-device').value : 'any';
         const roomType = document.getElementById('room-type').value;
         const timeStr = document.getElementById('time').value;
         const duration = parseInt(document.getElementById('duration').value) || 1;
@@ -406,6 +483,7 @@ if (bookingForm) {
         const newBooking = {
             name,
             deviceType,
+            specificDevice,
             roomType,
             startTime: startTime,
             duration,
