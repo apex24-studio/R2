@@ -68,7 +68,7 @@
                         </div>
                         <div class="form-group">
                             <label for="device-type">نوع الجهاز</label>
-                            <select id="device-type" required>
+                            <select id="device-type" required onchange="window.updateSpecificDeviceDropdown && window.updateSpecificDeviceDropdown()">
                                 <option value="PS5">PlayStation 5</option>
                                 <option value="PS4">PlayStation 4</option>
                             </select>

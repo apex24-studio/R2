@@ -155,6 +155,7 @@ function updateSpecificDeviceDropdown() {
         }
     });
 }
+window.updateSpecificDeviceDropdown = updateSpecificDeviceDropdown;
 
 // Global Interval to update timers dynamically on the screen
 setInterval(() => {
