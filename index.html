@@ -107,6 +107,7 @@
                         <div class="form-group">
                             <label for="room-type">المكان</label>
                             <select id="room-type" required>
+                                <option value="الصالة الرئيسية">الصالة الرئيسية</option>
                                 <option value="غرفة مستر الكبيرة">غرفة مستر الكبيرة</option>
                                 <option value="غرفة رقم 2">غرفة رقم 2</option>
                                 <option value="غرفة رقم 3">غرفة رقم 3</option>
@@ -116,6 +117,7 @@
                             <label for="duration">مدة الحجز</label>
                             <select id="duration" required onchange="window.updateTimeSlotsDropdown && window.updateTimeSlotsDropdown(); window.updatePaymentInstructionsGlobal && window.updatePaymentInstructionsGlobal()">
                                 <option value="">اختر مدة الحجز</option>
+                                <option value="open">مفتوح</option>
                                 <option value="1">ساعة واحدة</option>
                                 <option value="1.5">ساعة ونص</option>
                                 <option value="2">ساعتين</option>
@@ -187,7 +189,7 @@
     </footer>
 
     <!-- Load app logic FIRST (non-module) -->
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=6"></script>
 
     <!-- Then Firebase as module, which calls window.initApp -->
     <script type="module">

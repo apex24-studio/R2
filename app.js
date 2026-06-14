@@ -17,9 +17,10 @@ const PAYMENT_NUMBERS = {
 
 const initialConsoles = [
     { id: 1, name: "جهاز 1", type: "PS4", location: "غرفة مستر الكبيرة", status: "available" },
-    { id: 2, name: "جهاز 2", type: "PS4", location: "غرفة مستر الكبيرة", status: "available" },
-    { id: 3, name: "جهاز 3", type: "PS4", location: "غرفة رقم 2", status: "available" },
-    { id: 4, name: "جهاز 4", type: "PS4", location: "غرفة رقم 3", status: "available" }
+    { id: 2, name: "جهاز 2", type: "PS4", location: "غرفة رقم 2", status: "available" },
+    { id: 3, name: "جهاز 3", type: "PS4", location: "غرفة رقم 3", status: "available" },
+    { id: 4, name: "جهاز 4", type: "PS4", location: "الصالة الرئيسية", status: "available" },
+    { id: 5, name: "جهاز 5", type: "PS4", location: "الصالة الرئيسية", status: "available" }
 ];
 
 function formatTimeLeft(endTime) {
@@ -47,7 +48,8 @@ function getWorkingDayBaseDate() {
     return base;
 }
 
-function isSlotAvailable(startTime, duration, deviceType, specificDevice, roomType) {
+function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roomType) {
+    const duration = durationRaw === 'open' ? 24 : durationRaw;
     const start = startTime;
     const end = startTime + duration * 3600 * 1000;
     
@@ -55,7 +57,8 @@ function isSlotAvailable(startTime, duration, deviceType, specificDevice, roomTy
         if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
         
         const bStart = b.startTime;
-        const bEnd = b.startTime + b.duration * 3600 * 1000;
+        const bDuration = b.duration === 'open' ? 24 : b.duration;
+        const bEnd = b.startTime + bDuration * 3600 * 1000;
         return (start < bEnd && end > bStart);
     });
 
@@ -96,7 +99,8 @@ function updateTimeSlotsDropdown() {
     const deviceType = deviceTypeEl.value;
     const specificDevice = specificDeviceEl ? specificDeviceEl.value : 'any';
     const roomType = roomTypeEl.value;
-    const duration = parseFloat(durationEl.value) || 1;
+    const durationRaw = durationEl.value;
+    const duration = durationRaw === 'open' ? 'open' : parseFloat(durationRaw) || 1;
     
     const previousValue = timeSel.value;
     timeSel.innerHTML = '';
@@ -123,7 +127,8 @@ function updateTimeSlotsDropdown() {
     // 2. Dynamic slots from end times of active/approved bookings
     globalBookings.forEach(b => {
         if (b.status === 'approved' || b.status === 'active_in_store') {
-            const bEnd = b.startTime + b.duration * 3600 * 1000;
+            const bDuration = b.duration === 'open' ? 24 : b.duration;
+            const bEnd = b.startTime + bDuration * 3600 * 1000;
             slotTimesSet.add(bEnd);
         }
     });
@@ -223,9 +228,14 @@ function renderConsoles() {
         const isPS5 = c.type === 'PS5';
         const statusClass = c.status === 'available' ? 'status-available' : 'status-busy';
         const statusText = c.status === 'available' ? 'متاح الآن' : 'مشغول';
-        const timerDisplay = c.activeTimer && c.activeTimer.endTime > Date.now()
-            ? `<div class="public-timer" data-endtime="${c.activeTimer.endTime}" style="margin-top:10px;font-weight:bold;color:var(--accent-neon);font-family:'Orbitron',sans-serif;">--:--:--</div>`
-            : '';
+        let timerDisplay = '';
+        if (c.activeTimer) {
+            if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
+                timerDisplay = `<div class="public-timer" data-isopen="true" data-starttime="${c.activeTimer.startTime}" style="margin-top:10px;font-weight:bold;color:var(--success);font-family:'Orbitron',sans-serif;">00:00:00</div>`;
+            } else if (c.activeTimer.endTime > Date.now()) {
+                timerDisplay = `<div class="public-timer" data-endtime="${c.activeTimer.endTime}" style="margin-top:10px;font-weight:bold;color:var(--accent-neon);font-family:'Orbitron',sans-serif;">--:--:--</div>`;
+            }
+        }
         const card = document.createElement('div');
         card.className = 'console-card glass-panel';
         card.innerHTML = `
@@ -250,9 +260,14 @@ function renderAdminConsoles() {
         const statusBadge = c.status === 'available'
             ? '<span style="color:var(--success)">متاح</span>'
             : '<span style="color:var(--danger)">مشغول</span>';
-        const timerDisplay = c.activeTimer && c.activeTimer.endTime > Date.now()
-            ? `<div class="timer-display" data-endtime="${c.activeTimer.endTime}">--:--:--</div>`
-            : '';
+        let timerDisplay = '';
+        if (c.activeTimer) {
+            if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
+                timerDisplay = `<div class="timer-display" data-isopen="true" data-starttime="${c.activeTimer.startTime}">00:00:00</div>`;
+            } else if (c.activeTimer.endTime > Date.now()) {
+                timerDisplay = `<div class="timer-display" data-endtime="${c.activeTimer.endTime}">--:--:--</div>`;
+            }
+        }
         const row = document.createElement('div');
         row.className = 'device-row';
         row.innerHTML = `
@@ -387,27 +402,41 @@ function renderAdminBookings() {
             
             deviceGroups[deviceKey].forEach(b => {
                 const now = Date.now();
-                const gracePeriodMs = (b.duration / 2) * 3600 * 1000;
+                const durationNum = b.duration === 'open' ? 1 : b.duration;
+                const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
                 const timeElapsedSinceStart = now - b.startTime; // الوقت اللي فات من موعد الحجز
                 
                 // زرار إضافة الوقت المتبقي: يظهر لو الحجز نشط (مهلة الحضور شغالة) ولم يمتد بعد
                 let extendBtnHtml = '';
                 if (b.status === 'active_in_store' && !b.extended) {
-                    const fullBookingEndMs = b.startTime + (b.duration * 3600 * 1000);
-                    const remainingMs = Math.max(0, fullBookingEndMs - now);
-                    if (remainingMs > 60000) {
-                        const remainingMins = Math.floor(remainingMs / 60000);
-                        const fullCost = (PRICES[b.deviceType] || 50) * b.duration;
+                    if (b.duration === 'open') {
                         extendBtnHtml = `
                             <div style="background: rgba(0,210,255,0.08); border: 1px solid var(--accent-neon); border-radius: 8px; padding: 10px; margin: 8px 0;">
                                 <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 8px;">
-                                    <i class="fas fa-user-check"></i> العميل حضر – يمكن إضافة ${remainingMins} دقيقة (إجمالي: ${fullCost} ج.م)
+                                    <i class="fas fa-user-check"></i> العميل حضر – تفعيل العداد المفتوح
                                 </p>
                                 <button class="btn btn-small btn-primary" onclick="window.extendBookingTime('${b.id}')">
-                                    <i class="fas fa-plus-circle"></i> إضافة الوقت المتبقي (${remainingMins} دقيقة)
+                                    <i class="fas fa-play"></i> تفعيل الوقت المفتوح
                                 </button>
                             </div>
                         `;
+                    } else {
+                        const fullBookingEndMs = b.startTime + (b.duration * 3600 * 1000);
+                        const remainingMs = Math.max(0, fullBookingEndMs - now);
+                        if (remainingMs > 60000) {
+                            const remainingMins = Math.floor(remainingMs / 60000);
+                            const fullCost = (PRICES[b.deviceType] || 50) * b.duration;
+                            extendBtnHtml = `
+                                <div style="background: rgba(0,210,255,0.08); border: 1px solid var(--accent-neon); border-radius: 8px; padding: 10px; margin: 8px 0;">
+                                    <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 8px;">
+                                        <i class="fas fa-user-check"></i> العميل حضر – يمكن إضافة ${remainingMins} دقيقة (إجمالي: ${fullCost} ج.م)
+                                    </p>
+                                    <button class="btn btn-small btn-primary" onclick="window.extendBookingTime('${b.id}')">
+                                        <i class="fas fa-plus-circle"></i> إضافة الوقت المتبقي (${remainingMins} دقيقة)
+                                    </button>
+                                </div>
+                            `;
+                        }
                     }
                 }
                 
@@ -461,11 +490,8 @@ window.setStatus = function(index, status) {
 window.startTimer = function(index) {
     const h = parseInt(document.getElementById(`hours-${index}`).value) || 0;
     const m = parseInt(document.getElementById(`mins-${index}`).value) || 0;
-    if (h === 0 && m === 0) return alert("أدخل وقت صحيح");
     
-    const durationMs = (h * 3600 + m * 60) * 1000;
-    const durationHours = h + (m / 60);
-    const endTime = Date.now() + durationMs;
+    const isOpen = (h === 0 && m === 0);
     
     const c = globalConsoles[index];
     if (!c) return;
@@ -473,7 +499,19 @@ window.startTimer = function(index) {
     const specificDevice = c.name;
     const roomType = c.location;
     const pricePerHour = PRICES[deviceType] || 50;
-    const totalAmount = pricePerHour * durationHours;
+    
+    let durationHours, totalAmount, endTime;
+    
+    if (isOpen) {
+        durationHours = 'open';
+        totalAmount = pricePerHour / 2; // عربون ساعة
+        endTime = null;
+    } else {
+        const durationMs = (h * 3600 + m * 60) * 1000;
+        durationHours = h + (m / 60);
+        endTime = Date.now() + durationMs;
+        totalAmount = pricePerHour * durationHours;
+    }
 
     const bookingsRef = ref(db, 'bookings');
     const newBookingRef = push(bookingsRef);
@@ -498,8 +536,11 @@ window.startTimer = function(index) {
             status: 'busy',
             activeTimer: { 
                 endTime, 
-                durationMinutes: h * 60 + m,
-                bookingId: newBookingId
+                durationMinutes: isOpen ? null : h * 60 + m,
+                bookingId: newBookingId,
+                isOpen,
+                isGracePeriod: false,
+                startTime: Date.now()
             }
         });
     }).catch(err => {
@@ -514,14 +555,33 @@ window.startTimer = function(index) {
 window.stopTimer = function(index) {
     const c = globalConsoles[index];
     if (c && c.activeTimer && c.activeTimer.bookingId) {
-        update(ref(db, `bookings/${c.activeTimer.bookingId}`), { status: 'completed' });
+        const bookingId = c.activeTimer.bookingId;
+        const booking = globalBookings.find(b => b.id === bookingId);
+        
+        let updates = { status: 'completed' };
+        
+        if (booking && c.activeTimer.isOpen && c.activeTimer.startTime) {
+            const diffMs = Date.now() - c.activeTimer.startTime;
+            const hoursUsed = diffMs / (1000 * 3600);
+            const pricePerHour = PRICES[booking.deviceType] || 50;
+            
+            let finalCost = pricePerHour * hoursUsed;
+            if (booking.depositAmount && booking.depositAmount > 0) {
+                finalCost = Math.max(booking.depositAmount, finalCost);
+            }
+            updates.duration = parseFloat(hoursUsed.toFixed(2));
+            updates.depositAmount = Math.ceil(finalCost);
+        }
+        
+        update(ref(db, `bookings/${bookingId}`), updates);
     }
     updateConsoleField(index, { status: 'available', activeTimer: null });
 };
 
 function checkBookingConflict(booking) {
     const start = booking.startTime;
-    const end = booking.startTime + booking.duration * 3600 * 1000;
+    const bDurationNum = booking.duration === 'open' ? 24 : booking.duration;
+    const end = booking.startTime + bDurationNum * 3600 * 1000;
     
     // Filter other bookings that are approved or active in store and overlap with this time
     const overlappingBookings = globalBookings.filter(b => {
@@ -529,7 +589,8 @@ function checkBookingConflict(booking) {
         if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
         
         const bStart = b.startTime;
-        const bEnd = b.startTime + b.duration * 3600 * 1000;
+        const bOverlapDurationNum = b.duration === 'open' ? 24 : b.duration;
+        const bEnd = b.startTime + bOverlapDurationNum * 3600 * 1000;
         return (start < bEnd && end > bStart);
     });
 
@@ -601,13 +662,14 @@ window.activateBooking = function(id, bookingStartTime) {
     }
     if (idx === -1) return;
     
-    // العداد يشتغل لمدة مهلة الحضور (نص مدة الحجز) فقط
-    const gracePeriodMs = (booking.duration / 2) * 3600 * 1000;
+    // العداد يشتغل لمدة مهلة الحضور فقط
+    const durationNum = booking.duration === 'open' ? 1 : booking.duration;
+    const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
     const endTime = (bookingStartTime || booking.startTime) + gracePeriodMs;
     
     updateConsoleField(idx, {
         status: 'busy',
-        activeTimer: { endTime, bookingId: id, isGracePeriod: true }
+        activeTimer: { endTime, bookingId: id, isGracePeriod: true, isOpen: booking.duration === 'open', startTime: Date.now() }
     });
     update(ref(db, `bookings/${id}`), {
         status: 'active_in_store',
@@ -626,19 +688,30 @@ window.extendBookingTime = function(id) {
         return;
     }
     
-    // نهاية الحجز الكامل من وقت الحجز المجدول
-    const fullBookingEndMs = booking.startTime + (booking.duration * 3600 * 1000);
-    const fullCost = (PRICES[booking.deviceType] || 50) * booking.duration;
-    
-    updateConsoleField(consoleIdx, {
-        status: 'busy',
-        activeTimer: { ...globalConsoles[consoleIdx].activeTimer, endTime: fullBookingEndMs, isGracePeriod: false }
-    });
-    // تحديث الحجز: تعليم التمديد + تحديث المبلغ للتكلفة الكاملة
-    update(ref(db, `bookings/${id}`), {
-        extended: true,
-        depositAmount: fullCost
-    });
+    if (booking.duration === 'open') {
+        updateConsoleField(consoleIdx, {
+            status: 'busy',
+            activeTimer: { ...globalConsoles[consoleIdx].activeTimer, endTime: null, isGracePeriod: false, isOpen: true, startTime: Date.now() }
+        });
+        update(ref(db, `bookings/${id}`), {
+            extended: true,
+            actualStartTime: Date.now()
+        });
+    } else {
+        // نهاية الحجز الكامل من وقت الحجز المجدول
+        const fullBookingEndMs = booking.startTime + (booking.duration * 3600 * 1000);
+        const fullCost = (PRICES[booking.deviceType] || 50) * booking.duration;
+        
+        updateConsoleField(consoleIdx, {
+            status: 'busy',
+            activeTimer: { ...globalConsoles[consoleIdx].activeTimer, endTime: fullBookingEndMs, isGracePeriod: false }
+        });
+        // تحديث الحجز: تعليم التمديد + تحديث المبلغ للتكلفة الكاملة
+        update(ref(db, `bookings/${id}`), {
+            extended: true,
+            depositAmount: fullCost
+        });
+    }
 };
 
 window.switchTab = function(tab) {
@@ -664,7 +737,17 @@ setInterval(() => {
     const now = Date.now();
     document.querySelectorAll('.timer-display, .public-timer').forEach(el => {
         const endTime = parseInt(el.getAttribute('data-endtime'));
-        if (endTime) {
+        const isOpen = el.getAttribute('data-isopen') === 'true';
+        const startTime = parseInt(el.getAttribute('data-starttime'));
+        
+        if (isOpen && startTime && !endTime) {
+            const diff = now - startTime;
+            const h = Math.floor(diff / (1000 * 60 * 60));
+            const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const s = Math.floor((diff % (1000 * 60)) / 1000);
+            el.innerText = `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+            el.style.color = "var(--success)";
+        } else if (endTime) {
             if (endTime <= now) {
                 el.innerText = "انتهى الوقت";
                 el.style.color = "var(--danger)";
@@ -697,7 +780,8 @@ setInterval(() => {
     if (window._isAdmin) {
         globalBookings.forEach(b => {
             if (b.status === 'approved') {
-                const gracePeriodMs = (b.duration / 2) * 3600 * 1000;
+                const durationNum = b.duration === 'open' ? 1 : b.duration;
+                const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
                 const noShowTime = b.startTime + gracePeriodMs;
                 if (now >= noShowTime) {
                     // انتهت مهلة الحضور → إلغاء تلقائي
@@ -720,7 +804,8 @@ function updatePaymentInstructions() {
     if (!methodEl || !instructionsEl) return;
     const method = methodEl.value;
     const deviceType = deviceTypeEl ? deviceTypeEl.value : 'PS5';
-    const duration = parseFloat(durationEl ? durationEl.value : 1) || 1;
+    const durationRaw = durationEl ? durationEl.value : '1';
+    const duration = durationRaw === 'open' ? 1 : parseFloat(durationRaw) || 1;
     const deposit = (PRICES[deviceType] || 50) * duration / 2;
     if (method === 'vodafone') {
         instructionsEl.style.display = 'block';
@@ -754,10 +839,10 @@ window.initApp = function(firebaseServices) {
     const consolesRef = ref(db, 'consoles');
     const bookingsRef = ref(db, 'bookings');
 
-    // Seed DB if empty or if using old locations
+    // Seed DB if empty or if count is wrong
     get(consolesRef).then(snap => { 
         const data = snap.val();
-        if (!data || data.length === 0 || (data[0] && data[0].location === 'الصالة الرئيسية')) {
+        if (!data || data.length !== 5) {
             set(consolesRef, initialConsoles);
         }
     });
@@ -872,9 +957,11 @@ window.initApp = function(firebaseServices) {
                 return;
             }
             const startTime = parseInt(timeVal);
-            const duration = parseFloat(document.getElementById('duration').value) || 1;
+            const durationRaw = document.getElementById('duration').value;
+            const duration = durationRaw === 'open' ? 'open' : parseFloat(durationRaw) || 1;
             const paymentMethod = document.getElementById('payment-method').value;
-            const deposit = (PRICES[deviceType] || 50) * duration / 2;
+            const durationNum = duration === 'open' ? 1 : duration;
+            const deposit = (PRICES[deviceType] || 50) * durationNum / 2;
 
             push(bookingsRef, {
                 name, phone, deviceType, specificDevice, roomType,
