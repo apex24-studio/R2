@@ -16,12 +16,10 @@ const PAYMENT_NUMBERS = {
 };
 
 const initialConsoles = [
-    { id: 1, name: "جهاز 1", type: "PS5", location: "الصالة الرئيسية", status: "available" },
-    { id: 2, name: "جهاز 2", type: "PS5", location: "الصالة الرئيسية", status: "available" },
-    { id: 3, name: "جهاز 3", type: "PS4", location: "الصالة الرئيسية", status: "available" },
-    { id: 4, name: "VIP 1", type: "PS5", location: "غرفة VIP", status: "available" },
-    { id: 5, name: "VIP 2", type: "PS5", location: "غرفة VIP", status: "available" },
-    { id: 6, name: "جهاز 4", type: "PS4", location: "الصالة الرئيسية", status: "available" },
+    { id: 1, name: "جهاز 1", type: "PS4", location: "غرفة مستر الكبيرة", status: "available" },
+    { id: 2, name: "جهاز 2", type: "PS4", location: "غرفة مستر الكبيرة", status: "available" },
+    { id: 3, name: "جهاز 3", type: "PS4", location: "غرفة رقم 2", status: "available" },
+    { id: 4, name: "جهاز 4", type: "PS4", location: "غرفة رقم 3", status: "available" }
 ];
 
 function formatTimeLeft(endTime) {
@@ -66,7 +64,7 @@ function isSlotAvailable(startTime, duration, deviceType, specificDevice, roomTy
         if (conflict) return false;
     }
 
-    const dbRoomName = roomType === 'Main Hall' ? 'الصالة الرئيسية' : 'غرفة VIP';
+    const dbRoomName = roomType;
     const matchingDevices = globalConsoles.filter(c => c && c.type === deviceType && c.location === dbRoomName);
     const totalDevicesCount = matchingDevices.length;
     
@@ -201,8 +199,8 @@ function updateSpecificDeviceDropdown() {
     const selectedType = typeEl.value;
     const selectedRoom = roomEl ? roomEl.value : null;
     
-    // Map dropdown value ("Main Hall" / "VIP Room") to database value ("الصالة الرئيسية" / "غرفة VIP")
-    const dbRoomName = selectedRoom ? (selectedRoom === 'Main Hall' ? 'الصالة الرئيسية' : 'غرفة VIP') : null;
+    // Map dropdown value directly
+    const dbRoomName = selectedRoom ? selectedRoom : null;
     
     sel.innerHTML = '<option value="any">أي جهاز متاح</option>';
     globalConsoles.forEach(c => {
@@ -286,13 +284,16 @@ function renderAdminBookings() {
     if (!container) return;
     container.innerHTML = '';
     
-    if (globalBookings.length === 0) {
+    // Filter out old "cancelled" bookings so they don't count towards length or show up
+    const validBookings = globalBookings.filter(b => b.status !== 'cancelled');
+
+    if (validBookings.length === 0) {
         container.innerHTML = '<p class="text-muted">لا توجد حجوزات حالياً.</p>';
         return;
     }
     
     // Sort bookings by startTime descending
-    const sorted = [...globalBookings].sort((a, b) => b.startTime - a.startTime);
+    const sorted = [...validBookings].sort((a, b) => b.startTime - a.startTime);
     
     // Group bookings by day
     const groups = {};
@@ -369,7 +370,7 @@ function renderAdminBookings() {
         bookingsInDay.forEach(b => {
             const groupKey = (b.specificDevice && b.specificDevice !== 'any') 
                 ? b.specificDevice 
-                : `جهاز غير محدد (${b.deviceType} - ${b.roomType === 'Main Hall' ? 'الصالة الرئيسية' : 'غرفة VIP'})`;
+                : `جهاز غير محدد (${b.deviceType} - ${b.roomType})`;
             
             if (!deviceGroups[groupKey]) deviceGroups[groupKey] = [];
             deviceGroups[groupKey].push(b);
@@ -470,7 +471,7 @@ window.startTimer = function(index) {
     if (!c) return;
     const deviceType = c.type;
     const specificDevice = c.name;
-    const roomType = c.location === 'الصالة الرئيسية' ? 'Main Hall' : 'VIP Room';
+    const roomType = c.location;
     const pricePerHour = PRICES[deviceType] || 50;
     const totalAmount = pricePerHour * durationHours;
 
@@ -541,7 +542,7 @@ function checkBookingConflict(booking) {
     }
 
     // 2. Check total capacity for the device type in the chosen room
-    const dbRoomName = booking.roomType === 'Main Hall' ? 'الصالة الرئيسية' : 'غرفة VIP';
+    const dbRoomName = booking.roomType;
     const matchingDevices = globalConsoles.filter(c => c && c.type === booking.deviceType && c.location === dbRoomName);
     const totalDevicesCount = matchingDevices.length;
     
@@ -557,7 +558,7 @@ function checkBookingConflict(booking) {
     });
 
     if (conflictingOverlapping.length >= totalDevicesCount) {
-        const roomNameAr = booking.roomType === 'Main Hall' ? 'الصالة الرئيسية' : 'غرفة VIP';
+        const roomNameAr = booking.roomType;
         return `تنبيه: جميع أجهزة ${booking.deviceType} في ${roomNameAr} محجوزة بالفعل في هذا الوقت.`;
     }
 
@@ -592,7 +593,7 @@ window.activateBooking = function(id, bookingStartTime) {
         idx = globalConsoles.findIndex(c => c && c.name === booking.specificDevice && c.status === 'available');
     }
     if (idx === -1) {
-        const dbRoomName = booking.roomType === 'Main Hall' ? 'الصالة الرئيسية' : 'غرفة VIP';
+        const dbRoomName = booking.roomType;
         idx = globalConsoles.findIndex(c => c && c.type === booking.deviceType && c.location === dbRoomName && c.status === 'available');
     }
     if (idx === -1) {
@@ -753,8 +754,13 @@ window.initApp = function(firebaseServices) {
     const consolesRef = ref(db, 'consoles');
     const bookingsRef = ref(db, 'bookings');
 
-    // Seed DB if empty
-    get(consolesRef).then(snap => { if (!snap.exists()) set(consolesRef, initialConsoles); });
+    // Seed DB if empty or if using old locations
+    get(consolesRef).then(snap => { 
+        const data = snap.val();
+        if (!data || data.length === 0 || (data[0] && data[0].location === 'الصالة الرئيسية')) {
+            set(consolesRef, initialConsoles);
+        }
+    });
 
     // Auth state
     onAuthStateChanged(auth, user => {
@@ -876,7 +882,13 @@ window.initApp = function(firebaseServices) {
                 depositAmount: deposit, status: 'pending_payment', createdAt: Date.now()
             }).then(() => {
                 const fb = document.getElementById('booking-feedback');
-                if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--success)'; fb.innerText = 'تم تسجيل طلب الحجز بنجاح! الإدارة ستقوم بمراجعته قريباً.'; }
+                if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--success)'; fb.innerText = 'تم تسجيل طلب الحجز بنجاح! يتم تحويلك الآن للواتساب لإعلامنا...'; }
+                
+                // Redirect to WhatsApp
+                const msg = `مرحباً، قمت بحجز جديد وأريد تأكيده:\nالاسم: ${name}\nرقم الهاتف: ${phone}\nالمكان: ${roomType}\nالمدة: ${duration} ساعة\nوقت الحجز: ${new Date(startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'})}\nطريقة الدفع: ${paymentMethod}`;
+                const waUrl = `https://wa.me/201023402968?text=${encodeURIComponent(msg)}`;
+                window.open(waUrl, '_blank');
+
                 bookingForm.reset();
                 updateTimeSlotsDropdown();
                 const instrEl = document.getElementById('payment-instructions');
