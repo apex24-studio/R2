@@ -270,8 +270,8 @@ function renderAdminBookings() {
         return;
     }
     
-    // Sort bookings by startTime ascending
-    const sorted = [...globalBookings].sort((a, b) => a.startTime - b.startTime);
+    // Sort bookings by startTime descending
+    const sorted = [...globalBookings].sort((a, b) => b.startTime - a.startTime);
     
     // Group bookings by day
     const groups = {};
@@ -297,10 +297,27 @@ function renderAdminBookings() {
         return groups[b][0].startTime - groups[a][0].startTime;
     });
     
+    let weekTotalHours = 0;
+    let weekTotalMoney = 0;
+
     sortedDayKeys.forEach(dayKey => {
         const bookingsInDay = groups[dayKey];
         const folder = document.createElement('div');
         folder.className = 'day-folder';
+        
+        let dayTotalHours = 0;
+        let dayTotalMoney = 0;
+        
+        bookingsInDay.forEach(b => {
+            if (b.status !== 'cancelled' && b.status !== 'cancelled_noshow') {
+                dayTotalHours += b.duration;
+                const price = PRICES[b.deviceType] || 50;
+                dayTotalMoney += (price * b.duration);
+            }
+        });
+        
+        weekTotalHours += dayTotalHours;
+        weekTotalMoney += dayTotalMoney;
         
         // Header
         const header = document.createElement('div');
@@ -308,7 +325,7 @@ function renderAdminBookings() {
         header.innerHTML = `
             <i class="fas fa-folder-open folder-icon"></i>
             <span>${dayKey}</span>
-            <span class="count-badge">${bookingsInDay.length} حجز</span>
+            <span class="count-badge">${bookingsInDay.length} حجز | ${dayTotalHours} س | ${dayTotalMoney} ج</span>
             <i class="fas fa-chevron-down arrow-icon"></i>
         `;
         
@@ -339,7 +356,7 @@ function renderAdminBookings() {
                 <p><strong>الحالة:</strong> ${statusMap[b.status] || b.status}</p>
                 <div class="booking-actions">
                     ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
-                    ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
+                    ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
                 </div>
             `;
             content.appendChild(card);
@@ -349,6 +366,19 @@ function renderAdminBookings() {
         folder.appendChild(content);
         container.appendChild(folder);
     });
+    
+    const weekSummary = document.createElement('div');
+    weekSummary.className = 'glass-panel';
+    weekSummary.style.marginTop = '20px';
+    weekSummary.style.textAlign = 'center';
+    weekSummary.innerHTML = `
+        <h3 style="color: var(--accent-neon); margin-bottom: 10px;">إجمالي الفترة (آخر 7 أيام)</h3>
+        <div style="display: flex; justify-content: center; gap: 30px; font-size: 1.2rem; font-weight: bold;">
+            <span><i class="fas fa-clock"></i> إجمالي الساعات: ${weekTotalHours}</span>
+            <span><i class="fas fa-money-bill-wave"></i> إجمالي الدخل: ${weekTotalMoney} ج.م</span>
+        </div>
+    `;
+    container.appendChild(weekSummary);
 }
 window.renderAdminBookings = renderAdminBookings;
 
@@ -557,6 +587,11 @@ setInterval(() => {
                         update(ref(db, `bookings/${b.id}`), { status: 'active_in_store' });
                     }
                 }
+            } else if (b.status === 'active_in_store') {
+                const bEndTime = b.startTime + (b.duration * 3600 * 1000);
+                if (now >= bEndTime) {
+                    update(ref(db, `bookings/${b.id}`), { status: 'completed' });
+                }
             }
         });
     }
@@ -676,6 +711,15 @@ window.initApp = function(firebaseServices) {
     // Logout
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', () => signOut(auth));
+
+    // Hamburger menu
+    const hamburger = document.querySelector('.hamburger');
+    const navLinks = document.querySelector('.nav-links');
+    if (hamburger && navLinks) {
+        hamburger.addEventListener('click', () => {
+            navLinks.classList.toggle('active');
+        });
+    }
 
     // Booking form
     const bookingForm = document.getElementById('whatsapp-booking-form');
