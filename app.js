@@ -108,6 +108,12 @@ function updateTimeSlotsDropdown() {
     const base = getWorkingDayBaseDate();
     let hasAvailableSlots = false;
     
+    // Calculate store closing time (3:00 AM next day relative to base date)
+    const closingTimeObj = new Date(base.getTime());
+    closingTimeObj.setDate(closingTimeObj.getDate() + 1);
+    closingTimeObj.setHours(3, 0, 0, 0);
+    const storeClosingTime = closingTimeObj.getTime();
+    
     // Collect all slot times (fixed + dynamic from existing bookings)
     const slotTimesSet = new Set();
     
@@ -139,6 +145,19 @@ function updateTimeSlotsDropdown() {
     sortedSlotTimes.forEach(slotTime => {
         // Don't show past slots
         if (slotTime < Date.now() - 10 * 60 * 1000) {
+            return;
+        }
+
+        // Calculate expected end time
+        let expectedEndMs = slotTime;
+        if (duration === 'open') {
+            expectedEndMs = slotTime + (1 * 3600 * 1000); // Require at least 1 hour before closing
+        } else {
+            expectedEndMs = slotTime + (duration * 3600 * 1000);
+        }
+
+        // Skip slot if it extends beyond store closing time
+        if (expectedEndMs > storeClosingTime) {
             return;
         }
 
