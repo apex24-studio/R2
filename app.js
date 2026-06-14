@@ -98,7 +98,7 @@ function updateTimeSlotsDropdown() {
     const deviceType = deviceTypeEl.value;
     const specificDevice = specificDeviceEl ? specificDeviceEl.value : 'any';
     const roomType = roomTypeEl.value;
-    const duration = parseInt(durationEl.value) || 1;
+    const duration = parseFloat(durationEl.value) || 1;
     
     const previousValue = timeSel.value;
     timeSel.innerHTML = '';
@@ -366,24 +366,28 @@ function renderAdminBookings() {
             
             deviceGroups[deviceKey].forEach(b => {
                 const now = Date.now();
-                const isReadyToActivate = b.status === 'approved' && now >= b.startTime;
                 const gracePeriodMs = (b.duration / 2) * 3600 * 1000;
-                const timeUntilStart = b.startTime - now;
-                const timeUntilNoShow = (b.startTime + gracePeriodMs) - now;
+                const timeElapsedSinceStart = now - b.startTime; // الوقت اللي فات من موعد الحجز
                 
-                let arrivalBtnHtml = '';
-                if (isReadyToActivate) {
-                    const minsLeft = Math.max(0, Math.floor(timeUntilNoShow / 60000));
-                    arrivalBtnHtml = `
-                        <div style="background: rgba(0,230,118,0.08); border: 1px solid var(--success); border-radius: 8px; padding: 10px; margin: 8px 0;">
-                            <p style="color: var(--success); font-weight: bold; margin-bottom: 8px;">
-                                <i class="fas fa-user-check"></i> العميل وصل؟ مهلة الحضور تنتهي بعد ${minsLeft} دقيقة
-                            </p>
-                            <button class="btn btn-small btn-success" onclick="window.activateBooking('${b.id}')">
-                                <i class="fas fa-play"></i> بدء الحجز الآن
-                            </button>
-                        </div>
-                    `;
+                // زرار إضافة الوقت المتبقي: يظهر لو الحجز نشط (مهلة الحضور شغالة) ولم يمتد بعد
+                let extendBtnHtml = '';
+                if (b.status === 'active_in_store' && !b.extended) {
+                    const fullBookingEndMs = b.startTime + (b.duration * 3600 * 1000);
+                    const remainingMs = Math.max(0, fullBookingEndMs - now);
+                    if (remainingMs > 60000) {
+                        const remainingMins = Math.floor(remainingMs / 60000);
+                        const fullCost = (PRICES[b.deviceType] || 50) * b.duration;
+                        extendBtnHtml = `
+                            <div style="background: rgba(0,210,255,0.08); border: 1px solid var(--accent-neon); border-radius: 8px; padding: 10px; margin: 8px 0;">
+                                <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 8px;">
+                                    <i class="fas fa-user-check"></i> العميل حضر – يمكن إضافة ${remainingMins} دقيقة (إجمالي: ${fullCost} ج.م)
+                                </p>
+                                <button class="btn btn-small btn-primary" onclick="window.extendBookingTime('${b.id}')">
+                                    <i class="fas fa-plus-circle"></i> إضافة الوقت المتبقي (${remainingMins} دقيقة)
+                                </button>
+                            </div>
+                        `;
+                    }
                 }
                 
                 const card = document.createElement('div');
@@ -394,7 +398,7 @@ function renderAdminBookings() {
                     <p><strong>الوقت المحجوز:</strong> ${new Date(b.startTime).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})}</p>
                     <p><strong>طريقة الدفع:</strong> ${b.paymentMethod} - <strong>العربون:</strong> ${b.depositAmount} جنيه</p>
                     <p><strong>الحالة:</strong> ${statusMap[b.status] || b.status}</p>
-                    ${arrivalBtnHtml}
+                    ${extendBtnHtml}
                     <div class="booking-actions">
                         ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
                         ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
@@ -559,11 +563,10 @@ window.cancelBooking = function(id) {
     }
 };
 
-window.activateBooking = function(id) {
+window.activateBooking = function(id, bookingStartTime) {
     const booking = globalBookings.find(b => b.id === id);
     if (!booking) return;
     
-    // Find an available device (priority: specific device, then any of same type)
     let idx = -1;
     if (booking.specificDevice && booking.specificDevice !== 'any') {
         idx = globalConsoles.findIndex(c => c && c.name === booking.specificDevice && c.status === 'available');
@@ -575,23 +578,45 @@ window.activateBooking = function(id) {
     if (idx === -1) {
         idx = globalConsoles.findIndex(c => c && c.type === booking.deviceType && c.status === 'available');
     }
+    if (idx === -1) return;
     
-    if (idx === -1) {
-        alert('لا يوجد جهاز متاح من هذا النوع حالياً! تحقق من إدارة الأجهزة.');
-        return;
-    }
-    
-    const now = Date.now();
-    const durationMs = booking.duration * 3600 * 1000; // المدة كاملة من الآن
-    const endTime = now + durationMs;
+    // العداد يشتغل لمدة مهلة الحضور (نص مدة الحجز) فقط
+    const gracePeriodMs = (booking.duration / 2) * 3600 * 1000;
+    const endTime = (bookingStartTime || booking.startTime) + gracePeriodMs;
     
     updateConsoleField(idx, {
         status: 'busy',
-        activeTimer: { endTime, bookingId: id }
+        activeTimer: { endTime, bookingId: id, isGracePeriod: true }
     });
     update(ref(db, `bookings/${id}`), {
         status: 'active_in_store',
-        actualStartTime: now  // وقت البدء الفعلي
+        actualStartTime: Date.now()
+    });
+};
+
+// إضافة الوقت المتبقي لحد نهاية الحجز الكامل + تحديث الفلوس
+window.extendBookingTime = function(id) {
+    const booking = globalBookings.find(b => b.id === id);
+    if (!booking) return;
+    
+    const consoleIdx = globalConsoles.findIndex(c => c && c.activeTimer && c.activeTimer.bookingId === id);
+    if (consoleIdx === -1) {
+        alert('لم يتم إيجاد الجهاز المرتبط بهذا الحجز.');
+        return;
+    }
+    
+    // نهاية الحجز الكامل من وقت الحجز المجدول
+    const fullBookingEndMs = booking.startTime + (booking.duration * 3600 * 1000);
+    const fullCost = (PRICES[booking.deviceType] || 50) * booking.duration;
+    
+    updateConsoleField(consoleIdx, {
+        status: 'busy',
+        activeTimer: { ...globalConsoles[consoleIdx].activeTimer, endTime: fullBookingEndMs, isGracePeriod: false }
+    });
+    // تحديث الحجز: تعليم التمديد + تحديث المبلغ للتكلفة الكاملة
+    update(ref(db, `bookings/${id}`), {
+        extended: true,
+        depositAmount: fullCost
     });
 };
 
@@ -635,7 +660,9 @@ setInterval(() => {
                 if (now >= c.activeTimer.endTime) {
                     const consoleRef = ref(db, 'consoles/' + index);
                     if (c.activeTimer.bookingId) {
-                        update(ref(db, `bookings/${c.activeTimer.bookingId}`), { status: 'completed' });
+                        // لو كان مهلة الحضور ولم يتم التمديد → لم يحضر
+                        const newStatus = c.activeTimer.isGracePeriod ? 'cancelled_noshow' : 'completed';
+                        update(ref(db, `bookings/${c.activeTimer.bookingId}`), { status: newStatus });
                     }
                     set(consoleRef, { ...c, status: 'available', activeTimer: null }).catch(err => {
                         console.warn("Failed to auto-release console:", err);
@@ -645,17 +672,19 @@ setInterval(() => {
         });
     }
 
-    // Auto no-show cancellation (only if admin didn't manually start the booking)
+    // Auto-activate approved bookings when their time arrives + auto no-show cancellation
     if (window._isAdmin) {
         globalBookings.forEach(b => {
             if (b.status === 'approved') {
                 const gracePeriodMs = (b.duration / 2) * 3600 * 1000;
                 const noShowTime = b.startTime + gracePeriodMs;
-                // Auto-cancel only after grace period - admin must manually press "بدء الحجز" button
                 if (now >= noShowTime) {
+                    // انتهت مهلة الحضور → إلغاء تلقائي
                     update(ref(db, `bookings/${b.id}`), { status: 'cancelled_noshow' });
+                } else if (now >= b.startTime) {
+                    // حان وقت الحجز → تفعيل تلقائي من وقت الحجز المجدول
+                    window.activateBooking(b.id, b.startTime);
                 }
-                // Do NOT auto-activate anymore - admin presses button manually when client arrives
             }
         });
     }
@@ -670,7 +699,7 @@ function updatePaymentInstructions() {
     if (!methodEl || !instructionsEl) return;
     const method = methodEl.value;
     const deviceType = deviceTypeEl ? deviceTypeEl.value : 'PS5';
-    const duration = parseInt(durationEl ? durationEl.value : 1) || 1;
+    const duration = parseFloat(durationEl ? durationEl.value : 1) || 1;
     const deposit = (PRICES[deviceType] || 50) * duration / 2;
     if (method === 'vodafone') {
         instructionsEl.style.display = 'block';
@@ -685,6 +714,7 @@ function updatePaymentInstructions() {
         instructionsEl.style.display = 'none';
     }
 }
+window.updatePaymentInstructionsGlobal = updatePaymentInstructions;
 
 // Initialize everything once Firebase is ready
 window.initApp = function(firebaseServices) {
@@ -797,7 +827,7 @@ window.initApp = function(firebaseServices) {
         if (payMethodEl) payMethodEl.addEventListener('change', updatePaymentInstructions);
         if (deviceTypeEl) deviceTypeEl.addEventListener('change', () => { updatePaymentInstructions(); updateSpecificDeviceDropdown(); updateTimeSlotsDropdown(); });
         if (roomTypeEl) roomTypeEl.addEventListener('change', () => { updatePaymentInstructions(); updateSpecificDeviceDropdown(); updateTimeSlotsDropdown(); });
-        if (durationEl) durationEl.addEventListener('input', () => { updatePaymentInstructions(); updateTimeSlotsDropdown(); });
+        if (durationEl) durationEl.addEventListener('change', () => { updatePaymentInstructions(); updateTimeSlotsDropdown(); });
         if (specificDeviceEl) specificDeviceEl.addEventListener('change', updateTimeSlotsDropdown);
 
         // Initial populating of time slots dropdown
@@ -816,7 +846,7 @@ window.initApp = function(firebaseServices) {
                 return;
             }
             const startTime = parseInt(timeVal);
-            const duration = parseInt(document.getElementById('duration').value) || 1;
+            const duration = parseFloat(document.getElementById('duration').value) || 1;
             const paymentMethod = document.getElementById('payment-method').value;
             const deposit = (PRICES[deviceType] || 50) * duration / 2;
 

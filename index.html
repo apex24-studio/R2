@@ -114,8 +114,21 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="duration">مدة الحجز (بالساعات)</label>
-                            <input type="number" id="duration" min="1" max="24" required placeholder="عدد الساعات">
+                            <label for="duration">مدة الحجز</label>
+                            <select id="duration" required onchange="window.updateTimeSlotsDropdown && window.updateTimeSlotsDropdown(); window.updatePaymentInstructionsGlobal && window.updatePaymentInstructionsGlobal()">
+                                <option value="">اختر مدة الحجز</option>
+                                <option value="1">ساعة واحدة</option>
+                                <option value="1.5">ساعة ونص</option>
+                                <option value="2">ساعتين</option>
+                                <option value="2.5">ساعتين ونص</option>
+                                <option value="3">3 ساعات</option>
+                                <option value="3.5">3 ساعات ونص</option>
+                                <option value="4">4 ساعات</option>
+                                <option value="4.5">4 ساعات ونص</option>
+                                <option value="5">5 ساعات</option>
+                                <option value="5.5">5 ساعات ونص</option>
+                                <option value="6">6 ساعات</option>
+                            </select>
                         </div>
                         <div class="form-group">
                             <label for="time">وقت الحجز المتوقع (اليوم)</label>
