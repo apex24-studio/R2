@@ -129,6 +129,7 @@ h1, h2, h3 {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    direction: ltr;
 }
 
 .nav-logo-img {
@@ -392,6 +393,27 @@ h1, h2, h3 {
 
 .working-hours i {
     color: var(--accent-neon);
+}
+
+.booking-guidelines {
+    list-style: none;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+.booking-guidelines li {
+    margin-bottom: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.booking-guidelines i {
+    color: var(--accent-neon);
+    margin-top: 4px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
 }
 
 .social-links {
