@@ -202,7 +202,7 @@ function updateSpecificDeviceDropdown() {
     // Map dropdown value directly
     const dbRoomName = selectedRoom ? selectedRoom : null;
     
-    sel.innerHTML = '<option value="any">أي جهاز متاح</option>';
+    sel.innerHTML = '';
     globalConsoles.forEach(c => {
         if (c && c.type === selectedType && (!dbRoomName || c.location === dbRoomName)) {
             const opt = document.createElement('option');

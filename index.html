@@ -99,9 +99,8 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="specific-device">رقم الجهاز (اختياري)</label>
-                            <select id="specific-device">
-                                <option value="any">أي جهاز متاح</option>
+                            <label for="specific-device">رقم الجهاز</label>
+                            <select id="specific-device" required>
                                 <!-- Injected by JS -->
                             </select>
                         </div>
@@ -188,7 +187,7 @@
     </footer>
 
     <!-- Load app logic FIRST (non-module) -->
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 
     <!-- Then Firebase as module, which calls window.initApp -->
     <script type="module">
