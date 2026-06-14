@@ -93,6 +93,15 @@
                             <input type="tel" id="phone" required placeholder="أدخل رقم هاتفك">
                         </div>
                         <div class="form-group">
+                            <label for="room-type">المكان</label>
+                            <select id="room-type" required>
+                                <option value="الصالة الرئيسية">الصالة الرئيسية</option>
+                                <option value="غرفة مستر الكبيرة">غرفة مستر الكبيرة</option>
+                                <option value="غرفة رقم 2">غرفة رقم 2</option>
+                                <option value="غرفة رقم 3">غرفة رقم 3</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for="device-type">نوع الجهاز</label>
                             <select id="device-type" required onchange="window.updateSpecificDeviceDropdown && window.updateSpecificDeviceDropdown()">
                                 <option value="PS4">PlayStation 4</option>
@@ -105,12 +114,10 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="room-type">المكان</label>
-                            <select id="room-type" required>
-                                <option value="الصالة الرئيسية">الصالة الرئيسية</option>
-                                <option value="غرفة مستر الكبيرة">غرفة مستر الكبيرة</option>
-                                <option value="غرفة رقم 2">غرفة رقم 2</option>
-                                <option value="غرفة رقم 3">غرفة رقم 3</option>
+                            <label for="play-mode">وضع اللعب</label>
+                            <select id="play-mode" required onchange="window.updatePaymentInstructionsGlobal && window.updatePaymentInstructionsGlobal()">
+                                <option value="single">فردي / زوجي (40 ج/ساعة)</option>
+                                <option value="multi">مالتي - 4 أفراد (50 ج/ساعة)</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -189,7 +196,7 @@
     </footer>
 
     <!-- Load app logic FIRST (non-module) -->
-    <script src="app.js?v=7"></script>
+    <script src="app.js?v=8"></script>
 
     <!-- Then Firebase as module, which calls window.initApp -->
     <script type="module">
