@@ -305,53 +305,6 @@ window.bookConsole = function(deviceName, location, deviceType) {
     }, 150);
 };
 
-// Build background time slots display for a device card
-function buildTimeSlotsBg(device) {
-    const base = getWorkingDayBaseDate();
-    const closingTimeObj = new Date(base.getTime());
-    closingTimeObj.setDate(closingTimeObj.getDate() + 1);
-    closingTimeObj.setHours(3, 0, 0, 0);
-    const storeClosingTime = closingTimeObj.getTime();
-    const now = Date.now();
-
-    const slots = [];
-    for (let H = 12; H <= 26; H += 1) {
-        const slotDate = new Date(base.getTime());
-        let hour = Math.floor(H);
-        if (hour >= 24) {
-            slotDate.setDate(slotDate.getDate() + 1);
-            hour -= 24;
-        }
-        slotDate.setHours(hour, 0, 0, 0);
-        const slotTime = slotDate.getTime();
-
-        // Skip past slots (more than 30 min ago)
-        if (slotTime < now - 30 * 60 * 1000) continue;
-        // Skip slots beyond closing
-        if (slotTime + 3600 * 1000 > storeClosingTime) continue;
-
-        const available = (device.status !== 'busy') &&
-            isSlotAvailable(slotTime, 1, device.type, device.name, device.location);
-
-        // Display hour label (12-hour Arabic style)
-        let label = hour;
-        if (hour === 0) label = 12;
-        else if (hour > 12) label = hour - 12;
-
-        slots.push({ label, available });
-    }
-
-    if (slots.length === 0) return '';
-
-    const nums = slots.map(s => {
-        const cls = s.available ? 'slot-num-available' : 'slot-num-busy';
-        return `<span class="${cls}">${s.label}</span>`;
-    }).join('');
-
-    return `<div class="card-slots-bg">${nums}</div>`;
-}
-
-
 function renderConsoles() {
     const container = document.getElementById('consoles-container');
     if (!container) { updateSpecificDeviceDropdown(); return; }
@@ -365,6 +318,9 @@ function renderConsoles() {
         const statusClass = fullyBooked ? 'status-busy' : 'status-available';
         const statusText  = fullyBooked ? 'مشغول'     : 'متاح الآن';
         const glowClass   = fullyBooked ? 'glow-busy'  : 'glow-available';
+
+        // Background display number (use device id or 1-based index)
+        const bgNum = (c.id !== undefined && c.id !== null) ? c.id : (idx + 1);
 
         let timerDisplay = '';
         if (c.activeTimer) {
@@ -382,14 +338,11 @@ function renderConsoles() {
                </button>`
             : '';
 
-        // Build time slots background
-        const slotsBg = buildTimeSlotsBg(c);
-
         const card = document.createElement('div');
         card.className = 'console-card glass-panel';
         card.innerHTML = `
-            ${slotsBg}
             <div class="console-icon-wrapper ${glowClass}">
+                <span class="console-bg-number">${bgNum}</span>
                 <i class="fas fa-gamepad ${isPS5 ? 'ps5-icon' : 'ps4-icon'} console-icon" style="font-size:4rem;"></i>
             </div>
             <h3 class="console-title">${c.name} - ${c.type}</h3>
@@ -405,7 +358,6 @@ function renderConsoles() {
     updateSpecificDeviceDropdown();
     updateTimeSlotsDropdown();
 }
-
 
 function renderAdminConsoles() {
     const container = document.getElementById('admin-devices-list');
