@@ -87,6 +87,45 @@ function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roo
     return true;
 }
 
+// Check if a device has all remaining today's slots booked (or is manually busy)
+function isDeviceFullyBooked(device) {
+    if (!device) return false;
+    if (device.status === 'busy') return true;
+
+    const now = Date.now();
+    const base = getWorkingDayBaseDate();
+    const closingTimeObj = new Date(base.getTime());
+    closingTimeObj.setDate(closingTimeObj.getDate() + 1);
+    closingTimeObj.setHours(3, 0, 0, 0);
+    const storeClosingTime = closingTimeObj.getTime();
+
+    let hasFutureSlots = false;
+
+    for (let H = 12; H <= 26; H += 0.5) {
+        const slotDate = new Date(base.getTime());
+        let hour = Math.floor(H);
+        let minute = (H % 1) === 0.5 ? 30 : 0;
+        if (hour >= 24) {
+            slotDate.setDate(slotDate.getDate() + 1);
+            hour -= 24;
+        }
+        slotDate.setHours(hour, minute, 0, 0);
+        const slotTime = slotDate.getTime();
+
+        if (slotTime < now - 10 * 60 * 1000) continue;
+        if (slotTime + 3600 * 1000 > storeClosingTime) continue;
+
+        hasFutureSlots = true;
+        // If any slot is free for this specific device → not fully booked
+        if (isSlotAvailable(slotTime, 1, device.type, device.name, device.location)) {
+            return false;
+        }
+    }
+
+    // Fully booked only if there were future slots and all were taken
+    return hasFutureSlots;
+}
+
 function updateTimeSlotsDropdown() {
     const timeSel = document.getElementById('time');
     const deviceTypeEl = document.getElementById('device-type');
@@ -96,9 +135,17 @@ function updateTimeSlotsDropdown() {
     
     if (!timeSel || !roomTypeEl || !durationEl) return;
     
-    const deviceType = deviceTypeEl ? deviceTypeEl.value : 'PS4';
     const specificDevice = specificDeviceEl ? specificDeviceEl.value : 'any';
     const roomType = roomTypeEl.value;
+    
+    // Derive deviceType: from dropdown if present, otherwise from the selected specific device
+    let deviceType = deviceTypeEl ? deviceTypeEl.value : null;
+    if (!deviceType && specificDevice && specificDevice !== 'any') {
+        const foundDev = globalConsoles.find(c => c && c.name === specificDevice);
+        deviceType = foundDev ? foundDev.type : 'PS4';
+    }
+    deviceType = deviceType || 'PS4';
+
     const durationRaw = durationEl.value;
     const duration = durationRaw === 'open' ? 'open' : parseFloat(durationRaw) || 1;
     
@@ -220,15 +267,14 @@ function updateSpecificDeviceDropdown() {
     const typeEl = document.getElementById('device-type');
     const roomEl = document.getElementById('room-type');
     if (!sel) return;
-    const selectedType = typeEl ? typeEl.value : 'PS4';
+    // If no device-type element exists (e.g. after pre-selection), show all
+    const selectedType = typeEl ? typeEl.value : null;
     const selectedRoom = roomEl ? roomEl.value : null;
-    
-    // Map dropdown value directly
-    const dbRoomName = selectedRoom ? selectedRoom : null;
-    
+    const dbRoomName = selectedRoom || null;
+
     sel.innerHTML = '';
     globalConsoles.forEach(c => {
-        if (c && c.type === selectedType && (!dbRoomName || c.location === dbRoomName)) {
+        if (c && (!selectedType || c.type === selectedType) && (!dbRoomName || c.location === dbRoomName)) {
             const opt = document.createElement('option');
             opt.value = c.name;
             opt.textContent = `${c.name} (${c.status === 'available' ? 'متاح' : 'مشغول'})`;
@@ -238,15 +284,44 @@ function updateSpecificDeviceDropdown() {
 }
 window.updateSpecificDeviceDropdown = updateSpecificDeviceDropdown;
 
+// Pre-select device + location in booking form and scroll to it
+window.bookConsole = function(deviceName, location, deviceType) {
+    const roomSel = document.getElementById('room-type');
+    if (roomSel) {
+        roomSel.value = location;
+        roomSel.dispatchEvent(new Event('change'));
+    }
+    // Small delay so the specific-device dropdown re-populates first
+    setTimeout(() => {
+        const devSel = document.getElementById('specific-device');
+        if (devSel) {
+            devSel.value = deviceName;
+            devSel.dispatchEvent(new Event('change'));
+        }
+        const bookingSection = document.getElementById('booking');
+        if (bookingSection) {
+            bookingSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }, 150);
+};
+
 function renderConsoles() {
     const container = document.getElementById('consoles-container');
     if (!container) { updateSpecificDeviceDropdown(); return; }
     container.innerHTML = '';
-    globalConsoles.forEach(c => {
+    globalConsoles.forEach((c, idx) => {
         if (!c) return;
         const isPS5 = c.type === 'PS5';
-        const statusClass = c.status === 'available' ? 'status-available' : 'status-busy';
-        const statusText = c.status === 'available' ? 'متاح الآن' : 'مشغول';
+
+        // Determine effective status (manual busy OR all slots taken)
+        const fullyBooked = isDeviceFullyBooked(c);
+        const statusClass = fullyBooked ? 'status-busy' : 'status-available';
+        const statusText  = fullyBooked ? 'مشغول'     : 'متاح الآن';
+        const glowClass   = fullyBooked ? 'glow-busy'  : 'glow-available';
+
+        // Background display number (use device id or 1-based index)
+        const bgNum = (c.id !== undefined && c.id !== null) ? c.id : (idx + 1);
+
         let timerDisplay = '';
         if (c.activeTimer) {
             if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
@@ -255,13 +330,27 @@ function renderConsoles() {
                 timerDisplay = `<div class="public-timer" data-endtime="${c.activeTimer.endTime}" style="margin-top:10px;font-weight:bold;color:var(--accent-neon);font-family:'Orbitron',sans-serif;">--:--:--</div>`;
             }
         }
+
+        // Book Now button – only when device is not busy
+        const bookBtn = !fullyBooked
+            ? `<button class="btn-book-now" onclick="window.bookConsole('${c.name}','${c.location}','${c.type}')">
+                   <i class="fas fa-calendar-check"></i> احجز الآن
+               </button>`
+            : '';
+
         const card = document.createElement('div');
         card.className = 'console-card glass-panel';
         card.innerHTML = `
-            <i class="fas fa-gamepad ${isPS5 ? 'ps5-icon' : 'ps4-icon'} console-icon"></i>
+            <div class="console-icon-wrapper ${glowClass}">
+                <span class="console-bg-number">${bgNum}</span>
+                <i class="fas fa-gamepad ${isPS5 ? 'ps5-icon' : 'ps4-icon'} console-icon" style="font-size:4rem;"></i>
+            </div>
             <h3 class="console-title">${c.name} - ${c.type}</h3>
             <p class="console-location"><i class="fas fa-map-marker-alt"></i> ${c.location}</p>
-            <span class="status-badge ${statusClass}">${statusText}</span>
+            <div class="status-action-row">
+                <span class="status-badge ${statusClass}">${statusText}</span>
+                ${bookBtn}
+            </div>
             ${timerDisplay}
         `;
         container.appendChild(card);
@@ -983,9 +1072,15 @@ window.initApp = function(firebaseServices) {
             e.preventDefault();
             const name = document.getElementById('name').value;
             const phone = document.getElementById('phone').value;
-            const deviceTypeEl = document.getElementById('device-type');
-            const deviceType = deviceTypeEl ? deviceTypeEl.value : 'PS4';
-            const specificDevice = document.getElementById('specific-device') ? document.getElementById('specific-device').value : 'any';
+            const specificDeviceEl = document.getElementById('specific-device');
+            const specificDevice = specificDeviceEl ? specificDeviceEl.value : 'any';
+            // Derive deviceType from globalConsoles if device-type dropdown doesn't exist
+            const deviceTypeEl2 = document.getElementById('device-type');
+            let deviceType = deviceTypeEl2 ? deviceTypeEl2.value : null;
+            if (!deviceType) {
+                const found = globalConsoles.find(c => c && c.name === specificDevice);
+                deviceType = found ? found.type : 'PS4';
+            }
             const roomType = document.getElementById('room-type').value;
             const timeVal = document.getElementById('time').value;
             if (!timeVal) {

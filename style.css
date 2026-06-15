@@ -459,6 +459,119 @@ h1, h2, h3 {
     color: var(--accent-neon);
 }
 
+/* ==============================
+   Console Card Icon & Glow Number
+   ============================== */
+
+.console-icon-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 15px;
+}
+
+.console-bg-number {
+    position: absolute;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 5.5rem;
+    font-weight: 900;
+    letter-spacing: -2px;
+    opacity: 0.18;
+    user-select: none;
+    pointer-events: none;
+    transition: opacity 0.4s ease, text-shadow 0.4s ease;
+    z-index: 0;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+}
+
+.console-icon-wrapper .console-icon {
+    position: relative;
+    z-index: 1;
+}
+
+/* Available: green glow */
+.glow-available .console-bg-number {
+    color: var(--success);
+    text-shadow:
+        0 0 10px rgba(0, 230, 118, 0.8),
+        0 0 25px rgba(0, 230, 118, 0.5),
+        0 0 50px rgba(0, 230, 118, 0.3);
+    opacity: 0.35;
+    animation: pulse-green 2.5s infinite ease-in-out;
+}
+
+/* Busy: red glow */
+.glow-busy .console-bg-number {
+    color: var(--danger);
+    text-shadow:
+        0 0 10px rgba(255, 23, 68, 0.6),
+        0 0 25px rgba(255, 23, 68, 0.3);
+    opacity: 0.22;
+}
+
+@keyframes pulse-green {
+    0%, 100% {
+        opacity: 0.35;
+        text-shadow:
+            0 0 10px rgba(0, 230, 118, 0.8),
+            0 0 25px rgba(0, 230, 118, 0.5),
+            0 0 50px rgba(0, 230, 118, 0.3);
+    }
+    50% {
+        opacity: 0.55;
+        text-shadow:
+            0 0 15px rgba(0, 230, 118, 1),
+            0 0 35px rgba(0, 230, 118, 0.7),
+            0 0 70px rgba(0, 230, 118, 0.4);
+    }
+}
+
+/* Status + Action row */
+.status-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+/* Book Now button */
+.btn-book-now {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 900;
+    cursor: pointer;
+    border: none;
+    background: linear-gradient(45deg, #00b84a, #00e676);
+    color: #000;
+    box-shadow: 0 0 12px rgba(0, 230, 118, 0.45), 0 3px 8px rgba(0,0,0,0.3);
+    transition: all 0.3s ease;
+    text-decoration: none;
+    letter-spacing: 0.3px;
+    animation: book-btn-pulse 2.5s infinite ease-in-out;
+}
+
+.btn-book-now:hover {
+    background: linear-gradient(45deg, #00e676, #80ff9e);
+    box-shadow: 0 0 20px rgba(0, 230, 118, 0.8), 0 5px 15px rgba(0,0,0,0.4);
+    transform: translateY(-2px) scale(1.04);
+    color: #000;
+}
+
+@keyframes book-btn-pulse {
+    0%, 100% { box-shadow: 0 0 12px rgba(0, 230, 118, 0.45), 0 3px 8px rgba(0,0,0,0.3); }
+    50%       { box-shadow: 0 0 22px rgba(0, 230, 118, 0.8), 0 3px 8px rgba(0,0,0,0.3); }
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .nav-links {
