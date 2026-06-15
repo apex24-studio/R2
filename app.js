@@ -298,9 +298,9 @@ window.bookConsole = function(deviceName, location, deviceType) {
             devSel.value = deviceName;
             devSel.dispatchEvent(new Event('change'));
         }
-        const bookingSection = document.getElementById('booking');
-        if (bookingSection) {
-            bookingSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const bookingForm = document.getElementById('whatsapp-booking-form');
+        if (bookingForm) {
+            bookingForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
     }, 150);
 };

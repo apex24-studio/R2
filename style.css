@@ -465,16 +465,18 @@ h1, h2, h3 {
 
 .console-icon-wrapper {
     position: relative;
-    display: inline-flex;
+    display: flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 15px;
+    width: 130px;
+    height: 110px;
 }
 
 .console-bg-number {
     position: absolute;
     font-family: 'Orbitron', sans-serif;
-    font-size: 5.5rem;
+    font-size: 6rem;
     font-weight: 900;
     letter-spacing: -2px;
     opacity: 0.18;
@@ -486,11 +488,13 @@ h1, h2, h3 {
     left: 50%;
     transform: translate(-50%, -50%);
     white-space: nowrap;
+    line-height: 1;
 }
 
 .console-icon-wrapper .console-icon {
     position: relative;
     z-index: 1;
+    font-size: 4rem !important;
 }
 
 /* Available: green glow */
