@@ -167,7 +167,7 @@ function getDeviceHourlyStatus(device) {
             isBooked = globalBookings.some(b => {
                 if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
 
-                const bStart = b.actualStartTime || b.startTime;
+                const bStart = Number(b.actualStartTime || b.startTime);
                 const bDuration = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
                 const bEnd = bStart + bDuration * 3600 * 1000;
                 
@@ -398,7 +398,7 @@ function renderConsoles() {
         const isPS5 = c.type === 'PS5';
 
         // Determine effective status (manual busy OR all slots taken)
-        const fullyBooked = isDeviceFullyBooked(c);
+        let fullyBooked = isDeviceFullyBooked(c);
         const statusClass = fullyBooked ? 'status-busy' : 'status-available';
         const statusText  = fullyBooked ? 'مشغول'     : 'متاح الآن';
         const glowClass   = fullyBooked ? 'glow-busy'  : 'glow-available';
@@ -412,6 +412,16 @@ function renderConsoles() {
             else cls += ' hour-available';
             return `<span class="${cls}">${h.label}</span>`;
         }).join('');
+
+        const dName = (c.name || '').trim();
+        let debugStr = '';
+        globalBookings.forEach(b => {
+            if ((b.specificDevice || '').trim() === dName && (b.status === 'approved' || b.status === 'active_in_store')) {
+                const bStart = new Date(b.startTime).toLocaleString('en-US', {hour:'numeric', minute:'numeric'});
+                const isOverlap = b.startTime <= Date.now() + 86400000;
+                debugStr += `<div style="font-size:10px; color:#aaa;">Booking: ${bStart} (${b.duration}h) | Overlaps: ${isOverlap}</div>`;
+            }
+        });
 
         let timerDisplay = '';
         if (c.activeTimer) {
@@ -459,6 +469,7 @@ function renderAdminConsoles() {
         const statusBadge = c.status === 'available'
             ? '<span style="color:var(--success)">متاح</span>'
             : '<span style="color:var(--danger)">مشغول</span>';
+        
         let timerDisplay = '';
         if (c.activeTimer) {
             if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
@@ -467,6 +478,7 @@ function renderAdminConsoles() {
                 timerDisplay = `<div class="timer-display" data-endtime="${c.activeTimer.endTime}">--:--:--</div>`;
             }
         }
+
         const row = document.createElement('div');
         row.className = 'device-row';
         row.innerHTML = `
