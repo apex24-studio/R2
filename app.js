@@ -142,7 +142,7 @@ function getDeviceHourlyStatus(device) {
         const slotStart = slotDate.getTime();
         const slotEnd = slotStart + 3600 * 1000;
 
-        const isPast = slotEnd <= now;
+        const isPast = slotStart <= now;
 
         let isBooked = false;
 
@@ -216,18 +216,26 @@ function updateTimeSlotsDropdown() {
     closingTimeObj.setHours(3, 0, 0, 0);
     const storeClosingTime = closingTimeObj.getTime();
     
-    // 1. Fixed full-hour slots
-    for (let H = 12; H <= 26; H++) {
-        const slotDate = new Date(base.getTime());
-        let hour = H;
-        let minute = 0;
-        if (hour >= 24) {
-            slotDate.setDate(slotDate.getDate() + 1);
-            hour -= 24;
+    // Collect all slot times (fixed + dynamic from existing bookings)
+    const slotTimesSet = new Set();
+    
+    // 1. Fixed full-hour slots (12 PM to 2 AM) for Today and Tomorrow
+    const baseToday = base;
+    const baseTomorrow = new Date(base.getTime());
+    baseTomorrow.setDate(baseTomorrow.getDate() + 1);
+
+    [baseToday, baseTomorrow].forEach(bDate => {
+        for (let H = 12; H <= 26; H++) {
+            const slotDate = new Date(bDate.getTime());
+            let hour = H;
+            if (hour >= 24) {
+                slotDate.setDate(slotDate.getDate() + 1);
+                hour -= 24;
+            }
+            slotDate.setHours(hour, 0, 0, 0);
+            slotTimesSet.add(slotDate.getTime());
         }
-        slotDate.setHours(hour, minute, 0, 0);
-        slotTimesSet.add(slotDate.getTime());
-    }
+    });
 
     // 2. Dynamic slots from end times of active/approved bookings
     globalBookings.forEach(b => {
@@ -270,7 +278,20 @@ function updateTimeSlotsDropdown() {
             period = 'صباحاً';
         }
         const minuteStr = minute.toString().padStart(2, '0');
-        let labelStr = `${labelHour.toString().padStart(2, '0')}:${minuteStr} ${period}`;
+
+        // Determine Day Label
+        let dayLabel = 'اليوم';
+        const slotWorkingDate = new Date(slotTime);
+        if (slotWorkingDate.getHours() < 3) {
+            slotWorkingDate.setDate(slotWorkingDate.getDate() - 1);
+        }
+        slotWorkingDate.setHours(0,0,0,0);
+        
+        if (slotWorkingDate.getTime() > baseToday.getTime()) {
+            dayLabel = 'غداً';
+        }
+
+        let labelStr = `${dayLabel} - ${labelHour.toString().padStart(2, '0')}:${minuteStr} ${period}`;
         
         const available = isSlotAvailable(slotTime, duration, deviceType, specificDevice, roomType);
         
