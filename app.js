@@ -54,11 +54,11 @@ function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roo
     const end = startTime + duration * 3600 * 1000;
     
     const overlappingBookings = globalBookings.filter(b => {
-        if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
+        if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
         
-        const bStart = b.startTime;
+        const bStart = b.actualStartTime || b.startTime;
         const bDuration = b.duration === 'open' ? 24 : b.duration;
-        const bEnd = b.startTime + bDuration * 3600 * 1000;
+        const bEnd = bStart + bDuration * 3600 * 1000;
         return (start < bEnd && end > bStart);
     });
 
@@ -126,6 +126,61 @@ function isDeviceFullyBooked(device) {
     return hasFutureSlots;
 }
 
+function getDeviceHourlyStatus(device) {
+    const base = getWorkingDayBaseDate();
+    const now = Date.now();
+    const statuses = [];
+
+    for (let H = 12; H <= 26; H++) {
+        const slotDate = new Date(base.getTime());
+        let hour = H;
+        if (H >= 24) {
+            slotDate.setDate(slotDate.getDate() + 1);
+            hour = H - 24;
+        }
+        slotDate.setHours(hour, 0, 0, 0);
+        const slotStart = slotDate.getTime();
+        const slotEnd = slotStart + 3600 * 1000;
+
+        const isPast = slotEnd <= now;
+
+        let isBooked = false;
+
+        // Check active timer on this device
+        if (device.activeTimer) {
+            const timerStart = device.activeTimer.startTime || now;
+            if (device.activeTimer.isOpen && !device.activeTimer.isGracePeriod) {
+                if (slotStart >= timerStart) isBooked = true;
+            } else if (device.activeTimer.endTime) {
+                if (slotStart < device.activeTimer.endTime && slotEnd > timerStart) isBooked = true;
+            }
+        }
+
+        // Check bookings assigned to this specific device
+        if (!isBooked) {
+            isBooked = globalBookings.some(b => {
+                if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+                if (!b.specificDevice || b.specificDevice === 'any' || b.specificDevice !== device.name) return false;
+
+                const bStart = b.actualStartTime || b.startTime;
+                const bDuration = b.duration === 'open' ? 24 : b.duration;
+                const bEnd = bStart + bDuration * 3600 * 1000;
+                return (slotStart < bEnd && slotEnd > bStart);
+            });
+        }
+
+        // Label
+        let label;
+        if (H === 12 || H === 24) label = '12';
+        else if (H > 12 && H < 24) label = (H - 12).toString();
+        else label = (H - 24).toString();
+
+        statuses.push({ label, isPast, isBooked });
+    }
+
+    return statuses;
+}
+
 function updateTimeSlotsDropdown() {
     const timeSel = document.getElementById('time');
     const deviceTypeEl = document.getElementById('device-type');
@@ -179,9 +234,10 @@ function updateTimeSlotsDropdown() {
 
     // 2. Dynamic slots from end times of active/approved bookings
     globalBookings.forEach(b => {
-        if (b.status === 'approved' || b.status === 'active_in_store') {
+        if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'pending_payment') {
+            const bStart = b.actualStartTime || b.startTime;
             const bDuration = b.duration === 'open' ? 24 : b.duration;
-            const bEnd = b.startTime + bDuration * 3600 * 1000;
+            const bEnd = bStart + bDuration * 3600 * 1000;
             slotTimesSet.add(bEnd);
         }
     });
@@ -319,8 +375,15 @@ function renderConsoles() {
         const statusText  = fullyBooked ? 'مشغول'     : 'متاح الآن';
         const glowClass   = fullyBooked ? 'glow-busy'  : 'glow-available';
 
-        // Background display number (use device id or 1-based index)
-        const bgNum = (c.id !== undefined && c.id !== null) ? c.id : (idx + 1);
+        // Hourly availability for this device
+        const hourStatuses = getDeviceHourlyStatus(c);
+        const hoursHtml = hourStatuses.map(h => {
+            let cls = 'hour-slot';
+            if (h.isPast) cls += ' hour-past';
+            else if (h.isBooked) cls += ' hour-booked';
+            else cls += ' hour-available';
+            return `<span class="${cls}">${h.label}</span>`;
+        }).join('');
 
         let timerDisplay = '';
         if (c.activeTimer) {
@@ -341,8 +404,8 @@ function renderConsoles() {
         const card = document.createElement('div');
         card.className = 'console-card glass-panel';
         card.innerHTML = `
+            <div class="card-hours-strip">${hoursHtml}</div>
             <div class="console-icon-wrapper ${glowClass}">
-                <span class="console-bg-number">${bgNum}</span>
                 <i class="fas fa-gamepad ${isPS5 ? 'ps5-icon' : 'ps4-icon'} console-icon" style="font-size:4rem;"></i>
             </div>
             <h3 class="console-title">${c.name} - ${c.type}</h3>
@@ -460,7 +523,8 @@ function renderAdminBookings() {
         bookingsInDay.forEach(b => {
             // احتساب المبالغ: الحجوزات المؤكدة، النشطة، المكتملة، والملغاة لعدم الحضور (دفعوا العربون)
             if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow') {
-                dayTotalHours += b.duration;
+                const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
+                dayTotalHours += dur;
                 dayTotalMoney += (b.depositAmount || 0);
             }
         });
@@ -516,7 +580,8 @@ function renderAdminBookings() {
                 const now = Date.now();
                 const durationNum = b.duration === 'open' ? 1 : b.duration;
                 const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
-                const timeElapsedSinceStart = now - b.startTime; // الوقت اللي فات من موعد الحجز
+                const bStart = b.actualStartTime || b.startTime;
+                const timeElapsedSinceStart = now - bStart; // الوقت اللي فات من موعد الحجز الفعلي
                 
                 // زرار إضافة الوقت المتبقي: يظهر لو الحجز نشط (مهلة الحضور شغالة) ولم يمتد بعد
                 let extendBtnHtml = '';
@@ -533,7 +598,7 @@ function renderAdminBookings() {
                             </div>
                         `;
                     } else {
-                        const fullBookingEndMs = b.startTime + (b.duration * 3600 * 1000);
+                        const fullBookingEndMs = bStart + (b.duration * 3600 * 1000);
                         const remainingMs = Math.max(0, fullBookingEndMs - now);
                         if (remainingMs > 60000) {
                             const remainingMins = Math.floor(remainingMs / 60000);
@@ -582,11 +647,20 @@ function renderAdminBookings() {
     weekSummary.className = 'glass-panel';
     weekSummary.style.marginTop = '20px';
     weekSummary.style.textAlign = 'center';
+    weekSummary.style.border = '1px solid rgba(0, 210, 255, 0.2)';
     weekSummary.innerHTML = `
-        <h3 style="color: var(--accent-neon); margin-bottom: 10px;">إجمالي الفترة (آخر 7 أيام)</h3>
-        <div style="display: flex; justify-content: center; gap: 30px; font-size: 1.2rem; font-weight: bold;">
-            <span><i class="fas fa-clock"></i> إجمالي الساعات: ${weekTotalHours}</span>
-            <span><i class="fas fa-money-bill-wave"></i> إجمالي الدخل: ${weekTotalMoney} ج.م</span>
+        <h3 style="color: var(--accent-neon); margin-bottom: 20px; font-size: 1.3rem;">
+            <i class="fas fa-chart-pie"></i> إحصائيات الفترة (آخر 7 أيام)
+        </h3>
+        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; font-size: 1.1rem; font-weight: bold;">
+            <div style="background: rgba(0,210,255,0.08); padding: 15px 30px; border-radius: 12px; border: 1px solid rgba(0,210,255,0.4); min-width: 180px;">
+                <i class="fas fa-clock" style="color: var(--accent-neon); font-size: 1.8rem; margin-bottom: 12px; display: block;"></i> 
+                إجمالي الساعات<br><span style="font-size:1.8rem; color: #fff;">${weekTotalHours}</span>
+            </div>
+            <div style="background: rgba(0,230,118,0.08); padding: 15px 30px; border-radius: 12px; border: 1px solid rgba(0,230,118,0.4); min-width: 180px;">
+                <i class="fas fa-money-bill-wave" style="color: var(--success); font-size: 1.8rem; margin-bottom: 12px; display: block;"></i> 
+                إجمالي الدخل<br><span style="font-size:1.8rem; color: #fff;">${weekTotalMoney} <span style="font-size: 1rem;">ج.م</span></span>
+            </div>
         </div>
     `;
     container.appendChild(weekSummary);
@@ -700,18 +774,18 @@ window.stopTimer = function(index) {
 };
 
 function checkBookingConflict(booking) {
-    const start = booking.startTime;
+    const start = booking.actualStartTime || booking.startTime;
     const bDurationNum = booking.duration === 'open' ? 24 : booking.duration;
-    const end = booking.startTime + bDurationNum * 3600 * 1000;
+    const end = start + bDurationNum * 3600 * 1000;
     
     // Filter other bookings that are approved or active in store and overlap with this time
     const overlappingBookings = globalBookings.filter(b => {
         if (b.id === booking.id) return false;
         if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
         
-        const bStart = b.startTime;
+        const bStart = b.actualStartTime || b.startTime;
         const bOverlapDurationNum = b.duration === 'open' ? 24 : b.duration;
-        const bEnd = b.startTime + bOverlapDurationNum * 3600 * 1000;
+        const bEnd = bStart + bOverlapDurationNum * 3600 * 1000;
         return (start < bEnd && end > bStart);
     });
 
@@ -819,8 +893,9 @@ window.extendBookingTime = function(id) {
             actualStartTime: Date.now()
         });
     } else {
-        // نهاية الحجز الكامل من وقت الحجز المجدول
-        const fullBookingEndMs = booking.startTime + (booking.duration * 3600 * 1000);
+        // نهاية الحجز الكامل من وقت الحجز الفعلي
+        const bStart = booking.actualStartTime || booking.startTime;
+        const fullBookingEndMs = bStart + (booking.duration * 3600 * 1000);
         
         let pricePerHour = PRICES[booking.deviceType] || 40;
         if (booking.playMode === 'multi') pricePerHour = 50;

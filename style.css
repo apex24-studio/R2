@@ -252,6 +252,7 @@ h1, h2, h3 {
     text-align: center;
     position: relative;
     overflow: hidden;
+    padding-left: 44px;
 }
 
 .console-card:hover {
@@ -460,7 +461,7 @@ h1, h2, h3 {
 }
 
 /* ==============================
-   Console Card Icon & Glow Number
+   Console Card Icon & Glow
    ============================== */
 
 .console-icon-wrapper {
@@ -469,68 +470,159 @@ h1, h2, h3 {
     align-items: center;
     justify-content: center;
     margin-bottom: 15px;
-    width: 130px;
-    height: 110px;
-}
-
-.console-bg-number {
-    position: absolute;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 6rem;
-    font-weight: 900;
-    letter-spacing: -2px;
-    opacity: 0.18;
-    user-select: none;
-    pointer-events: none;
-    transition: opacity 0.4s ease, text-shadow 0.4s ease;
-    z-index: 0;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    white-space: nowrap;
-    line-height: 1;
 }
 
 .console-icon-wrapper .console-icon {
     position: relative;
     z-index: 1;
     font-size: 4rem !important;
+    transition: filter 0.4s ease;
 }
 
-/* Available: green glow */
-.glow-available .console-bg-number {
-    color: var(--success);
-    text-shadow:
-        0 0 10px rgba(0, 230, 118, 0.8),
-        0 0 25px rgba(0, 230, 118, 0.5),
-        0 0 50px rgba(0, 230, 118, 0.3);
-    opacity: 0.35;
-    animation: pulse-green 2.5s infinite ease-in-out;
+/* Available: green glow on icon */
+.glow-available .console-icon {
+    filter: drop-shadow(0 0 10px rgba(0, 230, 118, 0.6)) drop-shadow(0 0 25px rgba(0, 230, 118, 0.3));
+    animation: pulse-green-icon 2.5s infinite ease-in-out;
 }
 
-/* Busy: red glow */
-.glow-busy .console-bg-number {
-    color: var(--danger);
-    text-shadow:
-        0 0 10px rgba(255, 23, 68, 0.6),
-        0 0 25px rgba(255, 23, 68, 0.3);
-    opacity: 0.22;
+/* Busy: red glow on icon */
+.glow-busy .console-icon {
+    filter: drop-shadow(0 0 10px rgba(255, 23, 68, 0.5)) drop-shadow(0 0 20px rgba(255, 23, 68, 0.2));
 }
 
-@keyframes pulse-green {
+@keyframes pulse-green-icon {
     0%, 100% {
-        opacity: 0.35;
-        text-shadow:
-            0 0 10px rgba(0, 230, 118, 0.8),
-            0 0 25px rgba(0, 230, 118, 0.5),
-            0 0 50px rgba(0, 230, 118, 0.3);
+        filter: drop-shadow(0 0 10px rgba(0, 230, 118, 0.6)) drop-shadow(0 0 25px rgba(0, 230, 118, 0.3));
     }
     50% {
-        opacity: 0.55;
-        text-shadow:
-            0 0 15px rgba(0, 230, 118, 1),
-            0 0 35px rgba(0, 230, 118, 0.7),
-            0 0 70px rgba(0, 230, 118, 0.4);
+        filter: drop-shadow(0 0 15px rgba(0, 230, 118, 0.9)) drop-shadow(0 0 40px rgba(0, 230, 118, 0.5));
+    }
+}
+
+/* ==============================
+   Card Hours Strip (Background)
+   ============================== */
+
+.card-hours-strip {
+    position: absolute;
+    left: 6px;
+    top: 14px;
+    bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    width: 28px;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.hour-slot {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.6rem;
+    font-weight: 900;
+    line-height: 1;
+    transition: all 0.3s ease;
+}
+
+.hour-available {
+    color: var(--success);
+    text-shadow:
+        0 0 6px rgba(0, 230, 118, 0.9),
+        0 0 14px rgba(0, 230, 118, 0.5);
+    opacity: 0.9;
+}
+
+.hour-booked {
+    color: var(--danger);
+    text-shadow:
+        0 0 6px rgba(255, 23, 68, 0.9),
+        0 0 14px rgba(255, 23, 68, 0.5);
+    opacity: 0.9;
+}
+
+.hour-past {
+    color: rgba(160, 160, 160, 0.3);
+    text-shadow: none;
+    opacity: 0.35;
+}
+
+/* ==============================
+   Hero Guidelines Dropdown
+   ============================== */
+
+.guidelines-hero-wrapper {
+    position: relative;
+    display: inline-block;
+    margin-bottom: 22px;
+}
+
+.btn-guidelines-hero {
+    background: rgba(255, 23, 68, 0.12);
+    border: 1px solid rgba(255, 23, 68, 0.4);
+    color: #ff5252;
+    padding: 10px 26px;
+    border-radius: 30px;
+    font-family: 'Cairo', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+}
+
+.btn-guidelines-hero:hover {
+    background: rgba(255, 23, 68, 0.22);
+    box-shadow: 0 0 18px rgba(255, 23, 68, 0.3);
+    transform: translateY(-2px);
+}
+
+.btn-guidelines-hero .arrow {
+    transition: transform 0.3s ease;
+    font-size: 0.7rem;
+}
+
+.guidelines-hero-wrapper.open .btn-guidelines-hero .arrow {
+    transform: rotate(180deg);
+}
+
+.guidelines-hero-wrapper.open .btn-guidelines-hero {
+    background: rgba(255, 23, 68, 0.25);
+    box-shadow: 0 0 18px rgba(255, 23, 68, 0.3);
+}
+
+.guidelines-dropdown-content {
+    display: none;
+    position: absolute;
+    top: calc(100% + 12px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 440px;
+    max-width: 92vw;
+    z-index: 100;
+    padding: 22px !important;
+    border-color: rgba(255, 23, 68, 0.3) !important;
+    background: rgba(10, 10, 10, 0.95) !important;
+    backdrop-filter: blur(20px) !important;
+    animation: fadeSlideDown 0.3s ease forwards;
+    text-align: right;
+}
+
+.guidelines-hero-wrapper.open .guidelines-dropdown-content {
+    display: block;
+}
+
+@keyframes fadeSlideDown {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
     }
 }
 
