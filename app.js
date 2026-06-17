@@ -216,11 +216,11 @@ function updateTimeSlotsDropdown() {
     closingTimeObj.setHours(3, 0, 0, 0);
     const storeClosingTime = closingTimeObj.getTime();
     
-    // 1. Fixed half-hour slots
-    for (let H = 12; H <= 26; H += 0.5) {
+    // 1. Fixed full-hour slots
+    for (let H = 12; H <= 26; H++) {
         const slotDate = new Date(base.getTime());
-        let hour = Math.floor(H);
-        let minute = (H % 1) === 0.5 ? 30 : 0;
+        let hour = H;
+        let minute = 0;
         if (hour >= 24) {
             slotDate.setDate(slotDate.getDate() + 1);
             hour -= 24;
@@ -247,19 +247,6 @@ function updateTimeSlotsDropdown() {
     sortedSlotTimes.forEach(slotTime => {
         // Don't show past slots
         if (slotTime < Date.now()) {
-            return;
-        }
-
-        // Calculate expected end time
-        let expectedEndMs = slotTime;
-        if (duration === 'open') {
-            expectedEndMs = slotTime + (1 * 3600 * 1000); // Require at least 1 hour before closing
-        } else {
-            expectedEndMs = slotTime + (duration * 3600 * 1000);
-        }
-
-        // Skip slot if it extends beyond store closing time
-        if (expectedEndMs > storeClosingTime) {
             return;
         }
 
