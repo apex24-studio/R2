@@ -162,16 +162,31 @@ function getDeviceHourlyStatus(device) {
             }
         }
 
-        // Check bookings assigned to this specific device
+        // Check bookings assigned to this specific device (or floating bookings if this is the only device in the room)
         if (!isBooked) {
             isBooked = globalBookings.some(b => {
                 if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
-                if (!b.specificDevice || b.specificDevice === 'any' || b.specificDevice !== device.name) return false;
 
                 const bStart = b.actualStartTime || b.startTime;
-                const bDuration = b.duration === 'open' ? 24 : b.duration;
+                const bDuration = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
                 const bEnd = bStart + bDuration * 3600 * 1000;
-                return (slotStart < bEnd && slotEnd > bStart);
+                
+                // Add a small 1-minute tolerance just in case of millisecond mismatch
+                if (!(slotStart < bEnd - 60000 && slotEnd > bStart + 60000)) return false;
+
+                const bDevice = (b.specificDevice || '').trim();
+                const dName = (device.name || '').trim();
+
+                if (bDevice && bDevice !== 'any') {
+                    return bDevice === dName;
+                } else {
+                    // Floating booking (أقرب جهاز متاح)
+                    if (b.roomType === device.location && b.deviceType === device.type) {
+                        const devicesInRoom = globalConsoles.filter(c => c && c.location === b.roomType && c.type === b.deviceType);
+                        if (devicesInRoom.length === 1) return true;
+                    }
+                    return false;
+                }
             });
         }
 
