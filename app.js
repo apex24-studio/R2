@@ -131,6 +131,12 @@ function getDeviceHourlyStatus(device) {
     const now = Date.now();
     const statuses = [];
 
+    // If it is after 2:00 AM (the final hour before the shop officially closes at 3:00 AM),
+    // all today's slots have passed. So we shift the strip to show tomorrow's status.
+    if (new Date(now).getHours() === 2) {
+        base.setDate(base.getDate() + 1);
+    }
+
     for (let H = 12; H <= 26; H++) {
         const slotDate = new Date(base.getTime());
         let hour = H;
