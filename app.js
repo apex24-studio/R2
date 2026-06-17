@@ -216,20 +216,26 @@ function updateTimeSlotsDropdown() {
     closingTimeObj.setHours(3, 0, 0, 0);
     const storeClosingTime = closingTimeObj.getTime();
     
-    // Collect all slot times (fixed + dynamic from existing bookings)
-    const slotTimesSet = new Set();
-    
-    // 1. Add current time as a booking option ("Now")
-    const nowMs = Date.now();
-    slotTimesSet.add(nowMs);
-    
+    // 1. Fixed half-hour slots
+    for (let H = 12; H <= 26; H += 0.5) {
+        const slotDate = new Date(base.getTime());
+        let hour = Math.floor(H);
+        let minute = (H % 1) === 0.5 ? 30 : 0;
+        if (hour >= 24) {
+            slotDate.setDate(slotDate.getDate() + 1);
+            hour -= 24;
+        }
+        slotDate.setHours(hour, minute, 0, 0);
+        slotTimesSet.add(slotDate.getTime());
+    }
+
     // 2. Dynamic slots from end times of active/approved bookings
     globalBookings.forEach(b => {
         if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'pending_payment') {
             const bStart = b.actualStartTime || b.startTime;
             const bDuration = b.duration === 'open' ? 24 : b.duration;
             const bEnd = bStart + bDuration * 3600 * 1000;
-            if (bEnd >= nowMs) {
+            if (bEnd >= Date.now()) {
                 slotTimesSet.add(bEnd);
             }
         }
@@ -240,7 +246,7 @@ function updateTimeSlotsDropdown() {
 
     sortedSlotTimes.forEach(slotTime => {
         // Don't show past slots
-        if (slotTime < nowMs) {
+        if (slotTime < Date.now()) {
             return;
         }
 
@@ -278,10 +284,6 @@ function updateTimeSlotsDropdown() {
         }
         const minuteStr = minute.toString().padStart(2, '0');
         let labelStr = `${labelHour.toString().padStart(2, '0')}:${minuteStr} ${period}`;
-        
-        if (slotTime === nowMs) {
-            labelStr = `الآن (${labelStr})`;
-        }
         
         const available = isSlotAvailable(slotTime, duration, deviceType, specificDevice, roomType);
         
