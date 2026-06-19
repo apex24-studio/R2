@@ -123,6 +123,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, onValue, set, get, push, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
         import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBMRcV2zslPuaJF9jvFCGTpZ8h_dX1iMAM",
@@ -137,7 +138,9 @@
         window.initApp({
             db: getDatabase(app),
             auth: getAuth(app),
+            storage: getStorage(app),
             ref, onValue, set, get, push, update,
+            sRef, uploadBytes, getDownloadURL,
             signInWithEmailAndPassword, signOut, onAuthStateChanged
         });
     </script>

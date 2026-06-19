@@ -3,7 +3,8 @@
 // Called by firebase-init.js after Firebase loads
 // ==========================================
 
-let db, auth, ref, onValue, set, get, push, update,
+let db, auth, storage, ref, onValue, set, get, push, update,
+    sRef, uploadBytes, getDownloadURL,
     signInWithEmailAndPassword, signOut, onAuthStateChanged;
 
 let globalConsoles = [];
@@ -11,8 +12,7 @@ let globalBookings = [];
 
 const PRICES = { PS4: 40, PS5: 60 };
 const PAYMENT_NUMBERS = {
-    vodafone: "01000000000",
-    instapay: "roma_play@instapay"
+    vodafone: "01000000000"
 };
 
 const initialConsoles = [
@@ -198,7 +198,7 @@ function getDeviceHourlyStatus(device) {
         else if (hour > 12) labelHour = hour - 12;
 
         if (minute === 30) {
-            label = `30`;
+            label = `${labelHour}:30`;
         } else {
             label = labelHour.toString();
         }
@@ -695,9 +695,23 @@ function renderAdminBookings() {
                     <p><strong>رقم الهاتف:</strong> <a href="tel:${b.phone || ''}" style="color: var(--accent-neon); text-decoration: none; font-weight: bold;">${b.phone || 'غير مسجل'}</a> ${b.phone ? `<a href="https://wa.me/${b.phone.startsWith('0') ? '20' + b.phone.substring(1) : b.phone}" target="_blank" style="margin-right: 15px; color: #25D366; text-decoration: none; font-weight: bold;"><i class="fab fa-whatsapp"></i> واتساب</a>` : ''}</p>
                     <p><strong>موعد الحجز:</strong> ${new Date(b.startTime).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})}</p>
                     <p><strong>مدة الحجز:</strong> ${b.duration === 'open' ? 'مفتوح' : b.duration + ' ساعة'}</p>
-                    <p><strong>طريقة الدفع:</strong> ${b.paymentMethod === 'vodafone' ? 'فودافون كاش' : b.paymentMethod === 'instapay' ? 'إنستاباي' : 'في المحل'} ${b.depositAmount > 0 ? `(عربون: ${b.depositAmount} ج)` : ''}</p>
+                    <p><strong>طريقة الدفع:</strong> ${b.paymentMethod === 'vodafone' ? 'فودافون كاش' : 'في المحل'} ${b.depositAmount > 0 ? `(مبلغ الحجز: ${b.depositAmount} ج)` : ''}</p>
                     <p><strong>وضع اللعب:</strong> ${b.playMode === 'multi' ? 'مالتي (4 أفراد)' : 'فردي/زوجي'}</p>
                     <p><strong>الحالة:</strong> ${statusMap[b.status] || b.status}</p>
+                    ${b.userPhotoUrl ? `
+                    <div style="margin: 10px 0;">
+                        <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 6px;"><i class="fas fa-id-badge"></i> صورة شخصية:</p>
+                        <a href="${b.userPhotoUrl}" target="_blank">
+                            <img src="${b.userPhotoUrl}" alt="صورة العميل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid var(--accent-neon); cursor: pointer;">
+                        </a>
+                    </div>` : ''}
+                    ${b.receiptUrl ? `
+                    <div style="margin: 10px 0;">
+                        <p style="color: #4CAF50; font-weight: bold; margin-bottom: 6px;"><i class="fas fa-receipt"></i> إيصال فودافون كاش:</p>
+                        <a href="${b.receiptUrl}" target="_blank">
+                            <img src="${b.receiptUrl}" alt="إيصال التحويل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid #4CAF50; cursor: pointer;">
+                        </a>
+                    </div>` : ''}
                     ${extendBtnHtml}
                     <div class="booking-actions">
                         ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
@@ -1035,18 +1049,21 @@ window.activateBooking = function(id, bookingStartTime) {
     }
     if (idx === -1) return;
     
-    // العداد يشتغل لمدة مهلة الحضور فقط
-    const durationNum = booking.duration === 'open' ? 1 : booking.duration;
-    const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
-    const endTime = (bookingStartTime || booking.startTime) + gracePeriodMs;
+    // العداد يشتغل للمدة الكاملة للحجز من وقت البدء المجدول
+    const scheduledStart = booking.startTime;
+    const isOpen = booking.duration === 'open';
+    let endTime = null;
+    if (!isOpen) {
+        endTime = scheduledStart + (parseFloat(booking.duration) * 3600 * 1000);
+    }
     
     updateConsoleField(idx, {
         status: 'busy',
-        activeTimer: { endTime, bookingId: id, isGracePeriod: true, isOpen: booking.duration === 'open', startTime: Date.now() }
+        activeTimer: { endTime, bookingId: id, isGracePeriod: false, isOpen, startTime: scheduledStart }
     });
     update(ref(db, `bookings/${id}`), {
         status: 'active_in_store',
-        actualStartTime: Date.now()
+        actualStartTime: scheduledStart
     });
 };
 
@@ -1153,18 +1170,12 @@ setInterval(() => {
         });
     }
 
-    // Auto-activate approved bookings when their time arrives + auto no-show cancellation
+    // Auto-activate approved bookings when their time arrives
     if (window._isAdmin) {
         globalBookings.forEach(b => {
             if (b.status === 'approved') {
-                const durationNum = b.duration === 'open' ? 1 : b.duration;
-                const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
-                const noShowTime = b.startTime + gracePeriodMs;
-                if (now >= noShowTime) {
-                    // انتهت مهلة الحضور → إلغاء تلقائي
-                    update(ref(db, `bookings/${b.id}`), { status: 'cancelled_noshow' });
-                } else if (now >= b.startTime) {
-                    // حان وقت الحجز → تفعيل تلقائي من وقت الحجز المجدول
+                if (now >= b.startTime) {
+                    // حان وقت الحجز → تفعيل تلقائي فوري بالمدة الكاملة
                     window.activateBooking(b.id, b.startTime);
                 }
             }
@@ -1176,39 +1187,95 @@ setInterval(() => {
 function updatePaymentInstructions() {
     const methodEl = document.getElementById('payment-method');
     const instructionsEl = document.getElementById('payment-instructions');
-    const deviceTypeEl = document.getElementById('device-type');
+    const receiptGroup = document.getElementById('receipt-upload-group');
+    const receiptInput = document.getElementById('payment-receipt');
+    const specificDeviceEl = document.getElementById('specific-device');
     const durationEl = document.getElementById('duration');
     if (!methodEl || !instructionsEl) return;
     const method = methodEl.value;
-    const deviceType = deviceTypeEl ? deviceTypeEl.value : 'PS4';
+
+    // Derive deviceType from selected specific device
+    let deviceType = 'PS4';
+    if (specificDeviceEl && specificDeviceEl.value && specificDeviceEl.value !== 'any') {
+        const foundDev = globalConsoles.find(c => c && c.name === specificDeviceEl.value);
+        if (foundDev) deviceType = foundDev.type;
+    }
+
     const durationRaw = durationEl ? durationEl.value : '1';
     const duration = durationRaw === 'open' ? 1 : parseFloat(durationRaw) || 1;
-    const deposit = (PRICES[deviceType] || 50) * duration / 2;
+    const playModeEl = document.getElementById('play-mode');
+    const playMode = playModeEl ? playModeEl.value : 'single';
+    let pricePerHour = PRICES[deviceType] || 40;
+    if (playMode === 'multi') pricePerHour = 50;
+    const fullAmount = pricePerHour * duration;
+
+    // Show/hide receipt upload
+    if (receiptGroup) {
+        receiptGroup.style.display = method === 'vodafone' ? 'block' : 'none';
+        if (receiptInput) receiptInput.required = method === 'vodafone';
+    }
+
     if (method === 'vodafone') {
         instructionsEl.style.display = 'block';
-        instructionsEl.innerHTML = `<p style="color:var(--accent-neon)">حول <strong>${deposit} جنيه</strong> (نصف المدة) إلى:<br><strong style="font-size:1.2rem">${PAYMENT_NUMBERS.vodafone}</strong><br>ثم اضغط تأكيد.</p>`;
-    } else if (method === 'instapay') {
-        instructionsEl.style.display = 'block';
-        instructionsEl.innerHTML = `<p style="color:var(--accent-neon)">حول <strong>${deposit} جنيه</strong> (نصف المدة) إلى حساب إنستا باي:<br><strong style="font-size:1.2rem">${PAYMENT_NUMBERS.instapay}</strong><br>ثم اضغط تأكيد.</p>`;
+        instructionsEl.innerHTML = `<p style="color:var(--accent-neon)">حول <strong>${fullAmount} جنيه</strong> (قيمة الحجز كاملاً) إلى:<br><strong style="font-size:1.2rem">${PAYMENT_NUMBERS.vodafone}</strong><br>ثم ارفع صورة التحويل وأضغط تأكيد.</p>`;
     } else if (method === 'instore') {
         instructionsEl.style.display = 'block';
-        instructionsEl.innerHTML = `<p style="color:var(--accent-neon)">قم بزيارتنا في المحل لدفع <strong>${deposit} جنيه</strong> لتأكيد الحجز.</p>`;
+        instructionsEl.innerHTML = `<p style="color:var(--accent-neon)">قم بزيارتنا في المحل لدفع <strong>${fullAmount} جنيه</strong> (قيمة الحجز كاملاً) لتأكيد الحجز.</p>`;
     } else {
         instructionsEl.style.display = 'none';
     }
 }
 window.updatePaymentInstructionsGlobal = updatePaymentInstructions;
 
+// Image compression using Canvas API
+function compressImage(file, maxWidth = 800, maxHeight = 800, quality = 0.7) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const img = new Image();
+            img.onload = function() {
+                let { width, height } = img;
+
+                // Scale down if needed
+                if (width > maxWidth || height > maxHeight) {
+                    const ratio = Math.min(maxWidth / width, maxHeight / height);
+                    width = Math.round(width * ratio);
+                    height = Math.round(height * ratio);
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                canvas.toBlob(blob => {
+                    if (blob) resolve(blob);
+                    else reject(new Error('فشل ضغط الصورة'));
+                }, 'image/jpeg', quality);
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
 // Initialize everything once Firebase is ready
 window.initApp = function(firebaseServices) {
     db = firebaseServices.db;
     auth = firebaseServices.auth;
+    storage = firebaseServices.storage;
     ref = firebaseServices.ref;
     onValue = firebaseServices.onValue;
     set = firebaseServices.set;
     get = firebaseServices.get;
     push = firebaseServices.push;
     update = firebaseServices.update;
+    sRef = firebaseServices.sRef;
+    uploadBytes = firebaseServices.uploadBytes;
+    getDownloadURL = firebaseServices.getDownloadURL;
     signInWithEmailAndPassword = firebaseServices.signInWithEmailAndPassword;
     signOut = firebaseServices.signOut;
     onAuthStateChanged = firebaseServices.onAuthStateChanged;
@@ -1316,17 +1383,22 @@ window.initApp = function(firebaseServices) {
         if (deviceTypeEl) deviceTypeEl.addEventListener('change', () => { updatePaymentInstructions(); updateSpecificDeviceDropdown(); updateTimeSlotsDropdown(); });
         if (roomTypeEl) roomTypeEl.addEventListener('change', () => { updatePaymentInstructions(); updateSpecificDeviceDropdown(); updateTimeSlotsDropdown(); });
         if (durationEl) durationEl.addEventListener('change', () => { updatePaymentInstructions(); updateTimeSlotsDropdown(); });
-        if (specificDeviceEl) specificDeviceEl.addEventListener('change', updateTimeSlotsDropdown);
+        if (specificDeviceEl) specificDeviceEl.addEventListener('change', () => { updatePaymentInstructions(); updateTimeSlotsDropdown(); });
+        const playModeEl2 = document.getElementById('play-mode');
+        if (playModeEl2) playModeEl2.addEventListener('change', updatePaymentInstructions);
 
         // Initial populating of time slots dropdown
         updateTimeSlotsDropdown();
 
-        bookingForm.addEventListener('submit', e => {
+        bookingForm.addEventListener('submit', async e => {
             e.preventDefault();
+            const submitBtn = bookingForm.querySelector('button[type="submit"]');
+            const fb = document.getElementById('booking-feedback');
+
             const name = document.getElementById('name').value;
             const phone = document.getElementById('phone').value;
-            const specificDeviceEl = document.getElementById('specific-device');
-            const specificDevice = specificDeviceEl ? specificDeviceEl.value : 'any';
+            const specificDeviceEl2 = document.getElementById('specific-device');
+            const specificDevice = specificDeviceEl2 ? specificDeviceEl2.value : 'any';
             // Derive deviceType from globalConsoles if device-type dropdown doesn't exist
             const deviceTypeEl2 = document.getElementById('device-type');
             let deviceType = deviceTypeEl2 ? deviceTypeEl2.value : null;
@@ -1344,19 +1416,70 @@ window.initApp = function(firebaseServices) {
             const durationRaw = document.getElementById('duration').value;
             const duration = durationRaw === 'open' ? 'open' : parseFloat(durationRaw) || 1;
             const paymentMethod = document.getElementById('payment-method').value;
-            const durationNum = duration === 'open' ? 1 : duration;
-            const deposit = (PRICES[deviceType] || 50) * durationNum / 2;
+            const playModeEl3 = document.getElementById('play-mode');
+            const playMode = playModeEl3 ? playModeEl3.value : 'single';
 
-            push(bookingsRef, {
-                name, phone, deviceType, specificDevice, roomType,
-                startTime, duration, paymentMethod,
-                depositAmount: deposit, status: 'pending_payment', createdAt: Date.now()
-            }).then(() => {
-                const fb = document.getElementById('booking-feedback');
+            // Full booking amount
+            const durationNum = duration === 'open' ? 1 : duration;
+            let pricePerHour = PRICES[deviceType] || 40;
+            if (playMode === 'multi') pricePerHour = 50;
+            const fullAmount = pricePerHour * durationNum;
+
+            // Validate photo
+            const userPhotoInput = document.getElementById('user-photo');
+            const userPhotoFile = userPhotoInput ? userPhotoInput.files[0] : null;
+            if (!userPhotoFile) {
+                alert('الرجاء رفع صورة شخصية للتعريف');
+                return;
+            }
+
+            // Validate receipt if Vodafone Cash
+            const receiptInput = document.getElementById('payment-receipt');
+            const receiptFile = receiptInput ? receiptInput.files[0] : null;
+            if (paymentMethod === 'vodafone' && !receiptFile) {
+                alert('الرجاء رفع صورة تحويل فودافون كاش');
+                return;
+            }
+
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.innerText = 'جارٍ ضغط ورفع الصور...'; }
+            if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--accent-neon)'; fb.innerText = 'جارٍ ضغط ورفع الصور، يرجى الانتظار...'; }
+
+            try {
+                // Compress and upload user photo
+                const photoId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                if (fb) fb.innerText = 'جارٍ ضغط الصورة الشخصية...';
+                const compressedPhoto = await compressImage(userPhotoFile, 800, 800, 0.7);
+                if (fb) fb.innerText = 'جارٍ رفع الصورة الشخصية...';
+                const photoRef = sRef(storage, `booking_photos/${photoId}_photo.jpg`);
+                await uploadBytes(photoRef, compressedPhoto);
+                const userPhotoUrl = await getDownloadURL(photoRef);
+
+                // Compress and upload receipt if Vodafone Cash
+                let receiptUrl = null;
+                if (paymentMethod === 'vodafone' && receiptFile) {
+                    if (fb) fb.innerText = 'جارٍ ضغط صورة التحويل...';
+                    const compressedReceipt = await compressImage(receiptFile, 1000, 1000, 0.75);
+                    if (fb) fb.innerText = 'جارٍ رفع صورة التحويل...';
+                    const receiptRef = sRef(storage, `booking_photos/${photoId}_receipt.jpg`);
+                    await uploadBytes(receiptRef, compressedReceipt);
+                    receiptUrl = await getDownloadURL(receiptRef);
+                }
+
+                // Save booking to database
+                await push(bookingsRef, {
+                    name, phone, deviceType, specificDevice, roomType, playMode,
+                    startTime, duration, paymentMethod,
+                    depositAmount: fullAmount,
+                    status: 'pending_payment',
+                    createdAt: Date.now(),
+                    userPhotoUrl,
+                    ...(receiptUrl ? { receiptUrl } : {})
+                });
+
                 if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--success)'; fb.innerText = 'تم تسجيل طلب الحجز بنجاح! يتم تحويلك الآن للواتساب لإعلامنا...'; }
-                
+
                 // Redirect to WhatsApp
-                const msg = `مرحباً، قمت بحجز جديد وأريد تأكيده:\nالاسم: ${name}\nرقم الهاتف: ${phone}\nالمكان: ${roomType}\nالمدة: ${duration} ساعة\nوقت الحجز: ${new Date(startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'})}\nطريقة الدفع: ${paymentMethod}`;
+                const msg = `مرحباً، قمت بحجز جديد وأريد تأكيده:\nالاسم: ${name}\nرقم الهاتف: ${phone}\nالمكان: ${roomType}\nالمدة: ${duration === 'open' ? 'مفتوح' : duration + ' ساعة'}\nوقت الحجز: ${new Date(startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'})}\nطريقة الدفع: ${paymentMethod === 'vodafone' ? 'فودافون كاش' : 'في المحل'}\nالمبلغ: ${fullAmount} جنيه`;
                 const waUrl = `https://wa.me/201023402968?text=${encodeURIComponent(msg)}`;
                 window.open(waUrl, '_blank');
 
@@ -1364,7 +1487,15 @@ window.initApp = function(firebaseServices) {
                 updateTimeSlotsDropdown();
                 const instrEl = document.getElementById('payment-instructions');
                 if (instrEl) instrEl.style.display = 'none';
-            }).catch(err => { console.error(err); alert('حدث خطأ، يرجى المحاولة لاحقاً.'); });
+                const receiptGroup = document.getElementById('receipt-upload-group');
+                if (receiptGroup) receiptGroup.style.display = 'none';
+
+            } catch (err) {
+                console.error(err);
+                if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--danger)'; fb.innerText = 'حدث خطأ أثناء رفع الصور، يرجى المحاولة لاحقاً.'; }
+            } finally {
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerText = 'تأكيد الحجز المسبق'; }
+            }
         });
     }
 };

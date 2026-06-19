@@ -144,13 +144,20 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="payment-method">طريقة دفع العربون (نصف المدة)</label>
+                            <label for="user-photo">صورة شخصية للتعريف (إجباري)</label>
+                            <input type="file" id="user-photo" accept="image/*" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="payment-method">طريقة دفع قيمة الحجز كاملاً</label>
                             <select id="payment-method" required>
                                 <option value="">اختر طريقة الدفع</option>
                                 <option value="vodafone">فودافون كاش</option>
-                                <option value="instapay">إنستا باي</option>
                                 <option value="instore">الدفع في المحل</option>
                             </select>
+                        </div>
+                        <div class="form-group" id="receipt-upload-group" style="display: none;">
+                            <label for="payment-receipt">صورة تحويل فودافون كاش (إجباري)</label>
+                            <input type="file" id="payment-receipt" accept="image/*">
                         </div>
                         <div id="payment-instructions" class="payment-instructions" style="display: none;">
                             <!-- Injected by JS based on selection -->
@@ -202,6 +209,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, onValue, set, get, push, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
         import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBMRcV2zslPuaJF9jvFCGTpZ8h_dX1iMAM",
@@ -216,7 +224,9 @@
         window.initApp({
             db: getDatabase(app),
             auth: getAuth(app),
+            storage: getStorage(app),
             ref, onValue, set, get, push, update,
+            sRef, uploadBytes, getDownloadURL,
             signInWithEmailAndPassword, signOut, onAuthStateChanged
         });
     </script>

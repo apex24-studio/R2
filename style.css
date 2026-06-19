@@ -361,6 +361,26 @@ h1, h2, h3 {
     border-color: var(--accent-neon);
 }
 
+.form-group input[type="file"] {
+    padding: 8px 12px;
+    cursor: pointer;
+}
+.form-group input[type="file"]::file-selector-button {
+    background: var(--accent-blue);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    padding: 6px 12px;
+    margin-left: 10px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.3s ease;
+}
+.form-group input[type="file"]::file-selector-button:hover {
+    background: var(--accent-neon);
+    color: #000;
+}
+
 /* Footer */
 .footer {
     background: #000;
