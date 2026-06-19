@@ -148,7 +148,7 @@ function getDeviceHourlyStatus(device) {
         const slotStart = slotDate.getTime();
         const slotEnd = slotStart + 3600 * 1000;
 
-        const isPast = slotStart <= now;
+        const isPast = slotEnd <= now;
 
         let isBooked = false;
 
@@ -167,7 +167,7 @@ function getDeviceHourlyStatus(device) {
             isBooked = globalBookings.some(b => {
                 if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
 
-                const bStart = Number(b.actualStartTime || b.startTime);
+                const bStart = Number(b.startTime);
                 const bDuration = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
                 const bEnd = bStart + bDuration * 3600 * 1000;
                 
@@ -261,7 +261,17 @@ function updateTimeSlotsDropdown() {
     // 2. Dynamic slots from end times of active/approved bookings
     globalBookings.forEach(b => {
         if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'pending_payment') {
-            const bStart = b.actualStartTime || b.startTime;
+            // Only collect end times of bookings that match the selected room and device type
+            if (b.roomType !== roomType || b.deviceType !== deviceType) {
+                return;
+            }
+            // If a specific device is selected in the booking form, filter out bookings on other specific devices
+            if (specificDevice && specificDevice !== 'any') {
+                if (b.specificDevice !== 'any' && b.specificDevice !== specificDevice) {
+                    return;
+                }
+            }
+            const bStart = b.startTime; // Use scheduled startTime to avoid shifting
             const bDuration = b.duration === 'open' ? 24 : b.duration;
             const bEnd = bStart + bDuration * 3600 * 1000;
             if (bEnd >= Date.now()) {
@@ -620,7 +630,7 @@ function renderAdminBookings() {
                 const now = Date.now();
                 const durationNum = b.duration === 'open' ? 1 : b.duration;
                 const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
-                const bStart = b.actualStartTime || b.startTime;
+                const bStart = b.startTime;
                 const timeElapsedSinceStart = now - bStart; // الوقت اللي فات من موعد الحجز الفعلي
                 
                 // زرار إضافة الوقت المتبقي: يظهر لو الحجز نشط (مهلة الحضور شغالة) ولم يمتد بعد
@@ -730,21 +740,125 @@ window.startTimer = function(index) {
     const playModeEl = document.getElementById(`play-mode-${index}`);
     const playMode = playModeEl ? playModeEl.value : 'single';
     
-    let durationHours, totalAmount, endTime;
     let finalPricePerHour = PRICES[deviceType] || 40;
     if (playMode === 'multi') finalPricePerHour = 50;
+    
+    // Check if the device is already running (busy) and has an active timer
+    const isAlreadyBusy = c.status === 'busy' && c.activeTimer && c.activeTimer.endTime > Date.now();
+    
+    if (isAlreadyBusy) {
+        if (isOpen) {
+            alert("الجهاز قيد التشغيل بالفعل ولا يمكن تفعيل عداد مفتوح عليه أثناء عمله.");
+            return;
+        }
+        
+        // We want to EXTEND the running timer!
+        const existingBookingId = c.activeTimer.bookingId;
+        const durationMs = (h * 3600 + m * 60) * 1000;
+        const newEndTime = c.activeTimer.endTime + durationMs;
+        const durationHoursAdded = h + (m / 60);
+        
+        // Check if the extension causes an overlap/conflict with upcoming bookings
+        const overlappingBookings = globalBookings.filter(b => {
+            if (b.id === existingBookingId) return false;
+            if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+            
+            const bStart = b.startTime;
+            const bDuration = b.duration === 'open' ? 24 : b.duration;
+            const bEnd = bStart + bDuration * 3600 * 1000;
+            return (Date.now() < bEnd && newEndTime > bStart);
+        });
+        
+        // Look for specific device conflict
+        const specificConflict = overlappingBookings.find(b => b.specificDevice === c.name);
+        if (specificConflict) {
+            const timeStr = new Date(specificConflict.startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'});
+            alert(`تعذر تمديد الوقت: الجهاز محجوز بالفعل للعميل (${specificConflict.name}) يبدأ الساعة ${timeStr}`);
+            return;
+        }
+        
+        // Update console
+        updateConsoleField(index, {
+            status: 'busy',
+            activeTimer: { 
+                ...c.activeTimer,
+                endTime: newEndTime, 
+                durationMinutes: c.activeTimer.durationMinutes ? (c.activeTimer.durationMinutes + h * 60 + m) : (h * 60 + m)
+            }
+        });
+        
+        // Update booking in database
+        if (existingBookingId) {
+            get(ref(db, `bookings/${existingBookingId}`)).then(snap => {
+                if (snap.exists()) {
+                    const booking = snap.val();
+                    const newDuration = booking.duration === 'open' ? 'open' : (parseFloat(booking.duration) || 0) + durationHoursAdded;
+                    let pricePerHour = PRICES[booking.deviceType] || 40;
+                    if (booking.playMode === 'multi') pricePerHour = 50;
+                    const newDeposit = newDuration === 'open' ? booking.depositAmount : pricePerHour * newDuration;
+                    
+                    update(ref(db, `bookings/${existingBookingId}`), {
+                        duration: newDuration,
+                        depositAmount: newDeposit
+                    });
+                }
+            });
+        }
+        
+        // Clear input values
+        document.getElementById(`hours-${index}`).value = 0;
+        document.getElementById(`mins-${index}`).value = 0;
+        return;
+    }
+    
+    // Normal start timer logic: check for conflicts first
+    let durationHours, totalAmount, endTime;
     
     if (isOpen) {
         durationHours = 'open';
         totalAmount = finalPricePerHour / 2; // عربون ساعة
         endTime = null;
+        
+        // Check for any upcoming booking today on this device
+        const baseWorkingDate = getWorkingDayBaseDate();
+        const storeClosingTime = baseWorkingDate.getTime() + 27 * 3600 * 1000; // 3 AM next day
+        
+        const upcomingBooking = globalBookings.find(b => {
+            if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+            if (b.specificDevice !== c.name) return false;
+            return (b.startTime > Date.now() && b.startTime < storeClosingTime);
+        });
+        
+        if (upcomingBooking) {
+            const timeStr = new Date(upcomingBooking.startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'});
+            alert(`تعذر بدء العداد المفتوح: الجهاز محجوز اليوم للعميل (${upcomingBooking.name}) يبدأ الساعة ${timeStr}`);
+            return;
+        }
     } else {
         const durationMs = (h * 3600 + m * 60) * 1000;
         durationHours = h + (m / 60);
         endTime = Date.now() + durationMs;
         totalAmount = finalPricePerHour * durationHours;
+        
+        // Check for conflicts with this duration
+        const overlappingBookings = globalBookings.filter(b => {
+            if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+            
+            const bStart = b.startTime;
+            const bDuration = b.duration === 'open' ? 24 : b.duration;
+            const bEnd = bStart + bDuration * 3600 * 1000;
+            return (Date.now() < bEnd && endTime > bStart);
+        });
+        
+        // Look for specific device conflict
+        const specificConflict = overlappingBookings.find(b => b.specificDevice === c.name);
+        if (specificConflict) {
+            const timeStr = new Date(specificConflict.startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'});
+            alert(`تعذر بدء العداد: الجهاز محجوز بالفعل للعميل (${specificConflict.name}) يبدأ الساعة ${timeStr}`);
+            return;
+        }
     }
-
+    
     const bookingsRef = ref(db, 'bookings');
     const newBookingRef = push(bookingsRef);
     const newBookingId = newBookingRef.key;
@@ -776,11 +890,15 @@ window.startTimer = function(index) {
                 startTime: Date.now()
             }
         });
+        
+        // Clear input values
+        document.getElementById(`hours-${index}`).value = 0;
+        document.getElementById(`mins-${index}`).value = 0;
     }).catch(err => {
         console.error("Failed to create walk-in booking:", err);
         updateConsoleField(index, {
             status: 'busy',
-            activeTimer: { endTime, durationMinutes: h * 60 + m }
+            activeTimer: { endTime, durationMinutes: isOpen ? null : h * 60 + m }
         });
     });
 };
@@ -933,8 +1051,8 @@ window.extendBookingTime = function(id) {
             actualStartTime: Date.now()
         });
     } else {
-        // نهاية الحجز الكامل من وقت الحجز الفعلي
-        const bStart = booking.actualStartTime || booking.startTime;
+        // نهاية الحجز الكامل من وقت الحجز المجدول لتجنب الإزاحة
+        const bStart = booking.startTime;
         const fullBookingEndMs = bStart + (booking.duration * 3600 * 1000);
         
         let pricePerHour = PRICES[booking.deviceType] || 40;
