@@ -137,16 +137,17 @@ function getDeviceHourlyStatus(device) {
         base.setDate(base.getDate() + 1);
     }
 
-    for (let H = 12; H <= 26; H++) {
+    for (let H = 12; H <= 26; H += 0.5) {
         const slotDate = new Date(base.getTime());
-        let hour = H;
-        if (H >= 24) {
+        let hour = Math.floor(H);
+        let minute = (H % 1 === 0.5) ? 30 : 0;
+        if (hour >= 24) {
             slotDate.setDate(slotDate.getDate() + 1);
-            hour = H - 24;
+            hour -= 24;
         }
-        slotDate.setHours(hour, 0, 0, 0);
+        slotDate.setHours(hour, minute, 0, 0);
         const slotStart = slotDate.getTime();
-        const slotEnd = slotStart + 3600 * 1000;
+        const slotEnd = slotStart + 1800 * 1000; // 30 minutes in milliseconds
 
         const isPast = slotEnd <= now;
 
@@ -192,9 +193,15 @@ function getDeviceHourlyStatus(device) {
 
         // Label
         let label;
-        if (H === 12 || H === 24) label = '12';
-        else if (H > 12 && H < 24) label = (H - 12).toString();
-        else label = (H - 24).toString();
+        let labelHour = hour;
+        if (hour === 0) labelHour = 12;
+        else if (hour > 12) labelHour = hour - 12;
+
+        if (minute === 30) {
+            label = `30`;
+        } else {
+            label = labelHour.toString();
+        }
 
         statuses.push({ label, isPast, isBooked });
     }
@@ -240,20 +247,29 @@ function updateTimeSlotsDropdown() {
     // Collect all slot times (fixed + dynamic from existing bookings)
     const slotTimesSet = new Set();
     
-    // 1. Fixed full-hour slots (12 PM to 2 AM) for Today and Tomorrow
+    // Add "Now" slot if the shop is currently open
+    const nowTime = Date.now();
     const baseToday = base;
+    const startOfToday = baseToday.getTime() + 12 * 3600 * 1000;
+    const endOfToday = baseToday.getTime() + 27 * 3600 * 1000;
+    if (nowTime >= startOfToday && nowTime < endOfToday) {
+        slotTimesSet.add(nowTime);
+    }
+    
+    // 1. Fixed half-hour slots (12 PM to 2:30 AM) for Today and Tomorrow
     const baseTomorrow = new Date(base.getTime());
     baseTomorrow.setDate(baseTomorrow.getDate() + 1);
 
     [baseToday, baseTomorrow].forEach(bDate => {
-        for (let H = 12; H <= 26; H++) {
+        for (let H = 12; H <= 26.5; H += 0.5) {
             const slotDate = new Date(bDate.getTime());
-            let hour = H;
+            let hour = Math.floor(H);
+            let minute = (H % 1 === 0.5) ? 30 : 0;
             if (hour >= 24) {
                 slotDate.setDate(slotDate.getDate() + 1);
                 hour -= 24;
             }
-            slotDate.setHours(hour, 0, 0, 0);
+            slotDate.setHours(hour, minute, 0, 0);
             slotTimesSet.add(slotDate.getTime());
         }
     });
@@ -284,8 +300,8 @@ function updateTimeSlotsDropdown() {
     const sortedSlotTimes = Array.from(slotTimesSet).sort((a, b) => a - b);
 
     sortedSlotTimes.forEach(slotTime => {
-        // Don't show past slots
-        if (slotTime < Date.now()) {
+        // Don't show past slots, but allow "Now" slot
+        if (slotTime !== nowTime && slotTime < Date.now() - 10000) {
             return;
         }
 
@@ -323,6 +339,10 @@ function updateTimeSlotsDropdown() {
         }
 
         let labelStr = `${dayLabel} - ${labelHour.toString().padStart(2, '0')}:${minuteStr} ${period}`;
+        
+        if (slotTime === nowTime) {
+            labelStr = `اليوم - الآن (${labelHour.toString().padStart(2, '0')}:${minuteStr} ${period})`;
+        }
         
         const available = isSlotAvailable(slotTime, duration, deviceType, specificDevice, roomType);
         

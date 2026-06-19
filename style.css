@@ -519,7 +519,7 @@ h1, h2, h3 {
 
 .hour-slot {
     font-family: 'Orbitron', sans-serif;
-    font-size: 0.6rem;
+    font-size: 0.5rem;
     font-weight: 900;
     line-height: 1;
     transition: all 0.3s ease;
