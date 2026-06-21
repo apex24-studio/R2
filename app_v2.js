@@ -9,6 +9,7 @@ let db, auth, storage, ref, onValue, set, get, push, update,
 
 let globalConsoles = [];
 let globalBookings = [];
+let globalDailyTotals = {};
 
 const PRICES = { PS4: 40, PS5: 60 };
 const PAYMENT_NUMBERS = {
@@ -47,6 +48,56 @@ function getWorkingDayBaseDate() {
         base.setDate(base.getDate() - 1);
     }
     return base;
+}
+
+function getWorkingDayBaseDateFor(timestamp) {
+    if (!timestamp) return getWorkingDayBaseDate();
+    const date = new Date(timestamp);
+    const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    if (date.getHours() < 3) {
+        base.setDate(base.getDate() - 1);
+    }
+    return base;
+}
+
+function saveDailyTotalsFromBookings(bookings) {
+    if (!bookings || bookings.length === 0) return;
+    
+    const daysToUpdate = {};
+    bookings.forEach(b => {
+        if (b.status === 'cancelled') return;
+        const baseDate = getWorkingDayBaseDateFor(b.startTime);
+        const dayKey = getDayKey(baseDate.getTime());
+        
+        if (!daysToUpdate[dayKey]) {
+            daysToUpdate[dayKey] = {
+                totalHours: 0,
+                totalMoney: 0,
+                count: 0,
+                dayStartTimestamp: baseDate.getTime()
+            };
+        }
+        
+        daysToUpdate[dayKey].count++;
+        if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow') {
+            const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
+            daysToUpdate[dayKey].totalHours += dur;
+            daysToUpdate[dayKey].totalMoney += (b.depositAmount || 0);
+        }
+    });
+
+    Object.keys(daysToUpdate).forEach(dayKey => {
+        const dtRef = ref(db, `daily_totals/${dayKey}`);
+        set(dtRef, {
+            totalHours: parseFloat(daysToUpdate[dayKey].totalHours.toFixed(2)),
+            totalMoney: Math.ceil(daysToUpdate[dayKey].totalMoney),
+            count: daysToUpdate[dayKey].count,
+            dayStartTimestamp: daysToUpdate[dayKey].dayStartTimestamp,
+            lastUpdated: Date.now()
+        }).catch(err => {
+            console.warn(`Failed to save daily totals for ${dayKey}:`, err);
+        });
+    });
 }
 
 function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roomType) {
@@ -579,7 +630,7 @@ function renderAdminBookings() {
     // Filter out old "cancelled" bookings so they don't count towards length or show up
     const validBookings = globalBookings.filter(b => b.status !== 'cancelled');
 
-    if (validBookings.length === 0) {
+    if (validBookings.length === 0 && Object.keys(globalDailyTotals).length === 0) {
         container.innerHTML = '<p class="text-muted">لا توجد حجوزات حالياً.</p>';
         return;
     }
@@ -590,7 +641,8 @@ function renderAdminBookings() {
     // Group bookings by day
     const groups = {};
     sorted.forEach(b => {
-        const dayKey = getDayKey(b.startTime);
+        const baseDate = getWorkingDayBaseDateFor(b.startTime);
+        const dayKey = getDayKey(baseDate.getTime());
         if (!groups[dayKey]) {
             groups[dayKey] = [];
         }
@@ -606,13 +658,27 @@ function renderAdminBookings() {
         'completed': '<span style="color:var(--text-muted)">مكتمل</span>'
     };
     
-    // Sort day keys chronologically descending (newest/today's date on top, older dates below)
-    const sortedDayKeys = Object.keys(groups).sort((a, b) => {
-        return groups[b][0].startTime - groups[a][0].startTime;
+    // Merge day keys from groups and globalDailyTotals
+    const allDayKeys = new Set(Object.keys(groups));
+    Object.keys(globalDailyTotals).forEach(dayKey => {
+        allDayKeys.add(dayKey);
     });
-    
-    let weekTotalHours = 0;
-    let weekTotalMoney = 0;
+
+    const getDayTimestamp = (dayKey) => {
+        if (globalDailyTotals[dayKey] && globalDailyTotals[dayKey].dayStartTimestamp) {
+            return globalDailyTotals[dayKey].dayStartTimestamp;
+        }
+        if (groups[dayKey] && groups[dayKey].length > 0) {
+            const baseDate = getWorkingDayBaseDateFor(groups[dayKey][0].startTime);
+            return baseDate.getTime();
+        }
+        return 0;
+    };
+
+    // Sort day keys chronologically descending (newest/today's date on top, older dates below)
+    const sortedDayKeys = Array.from(allDayKeys).sort((a, b) => {
+        return getDayTimestamp(b) - getDayTimestamp(a);
+    });
 
     sortedDayKeys.forEach(dayKey => {
         const bookingsInDay = groups[dayKey];
@@ -621,26 +687,30 @@ function renderAdminBookings() {
         
         let dayTotalHours = 0;
         let dayTotalMoney = 0;
-        
-        bookingsInDay.forEach(b => {
-            // احتساب المبالغ: الحجوزات المؤكدة، النشطة، المكتملة، والملغاة لعدم الحضور (دفعوا العربون)
-            if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow') {
-                const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
-                dayTotalHours += dur;
-                dayTotalMoney += (b.depositAmount || 0);
-            }
-        });
-        
-        weekTotalHours += dayTotalHours;
-        weekTotalMoney += dayTotalMoney;
+        let bookingsCount = 0;
+
+        if (bookingsInDay) {
+            bookingsInDay.forEach(b => {
+                if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow') {
+                    const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
+                    dayTotalHours += dur;
+                    dayTotalMoney += (b.depositAmount || 0);
+                }
+            });
+            bookingsCount = bookingsInDay.length;
+        } else if (globalDailyTotals[dayKey]) {
+            dayTotalHours = globalDailyTotals[dayKey].totalHours || 0;
+            dayTotalMoney = globalDailyTotals[dayKey].totalMoney || 0;
+            bookingsCount = globalDailyTotals[dayKey].count || 0;
+        }
         
         // Header
         const header = document.createElement('div');
         header.className = 'day-folder-header';
         header.innerHTML = `
             <i class="fas fa-folder-open folder-icon"></i>
-            <span>${dayKey}</span>
-            <span class="count-badge">${bookingsInDay.length} حجز | ${dayTotalHours} س | ${dayTotalMoney} ج</span>
+            <span>${dayKey} ${bookingsInDay ? '' : '<span style="font-size: 0.8rem; opacity: 0.7; color: var(--accent-neon);">(مؤرشف)</span>'}</span>
+            <span class="count-badge">${bookingsCount} حجز | ${dayTotalHours} س | ${dayTotalMoney} ج</span>
             <i class="fas fa-chevron-down arrow-icon"></i>
         `;
         
@@ -659,91 +729,199 @@ function renderAdminBookings() {
         const content = document.createElement('div');
         content.className = 'day-folder-content';
         
-        const deviceGroups = {};
-        bookingsInDay.forEach(b => {
-            const groupKey = (b.specificDevice && b.specificDevice !== 'any') 
-                ? b.specificDevice 
-                : `جهاز غير محدد (${b.deviceType} - ${b.roomType})`;
-            if (!deviceGroups[groupKey]) deviceGroups[groupKey] = [];
-            deviceGroups[groupKey].push(b);
-        });
-
-        Object.keys(deviceGroups).forEach(deviceKey => {
-            const groupHeader = document.createElement('h4');
-            groupHeader.style.color = 'var(--accent-neon)';
-            groupHeader.style.margin = '15px 0 10px 0';
-            groupHeader.style.borderBottom = '1px solid var(--glass-border)';
-            groupHeader.style.paddingBottom = '5px';
-            groupHeader.innerHTML = `<i class="fas fa-desktop"></i> ${deviceKey}`;
-            content.appendChild(groupHeader);
-            
-            deviceGroups[deviceKey].forEach(b => {
-                const now = Date.now();
-                
-                // زرار إضافة الوقت المتبقي: (تم إلغاء مهلة الحضور - لم يعد هناك حاجة لهذا الزر)
-
-                
-                const card = document.createElement('div');
-                card.className = 'booking-card';
-                card.innerHTML = `
-                    <h4>${b.name}</h4>
-                    <p><strong>رقم الهاتف:</strong> <a href="tel:${b.phone || ''}" style="color: var(--accent-neon); text-decoration: none; font-weight: bold;">${b.phone || 'غير مسجل'}</a> ${b.phone ? `<a href="https://wa.me/${b.phone.startsWith('0') ? '20' + b.phone.substring(1) : b.phone}" target="_blank" style="margin-right: 15px; color: #25D366; text-decoration: none; font-weight: bold;"><i class="fab fa-whatsapp"></i> واتساب</a>` : ''}</p>
-                    <p><strong>موعد الحجز:</strong> ${new Date(b.startTime).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})}</p>
-                    <p><strong>مدة الحجز:</strong> ${b.duration === 'open' ? 'مفتوح' : b.duration + ' ساعة'}</p>
-                    <p><strong>طريقة الدفع:</strong> ${b.paymentMethod === 'vodafone' ? 'فودافون كاش' : 'في المحل'} ${b.depositAmount > 0 ? `(مبلغ الحجز: ${b.depositAmount} ج)` : ''}</p>
-                    <p><strong>وضع اللعب:</strong> ${b.playMode === 'multi' ? 'مالتي (4 أفراد)' : 'فردي/زوجي'}</p>
-                    <p><strong>الحالة:</strong> ${statusMap[b.status] || b.status}</p>
-                    ${b.userPhotoUrl ? `
-                    <div style="margin: 10px 0;">
-                        <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 6px;"><i class="fas fa-id-badge"></i> صورة شخصية:</p>
-                        <a href="${b.userPhotoUrl}" target="_blank">
-                            <img src="${b.userPhotoUrl}" alt="صورة العميل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid var(--accent-neon); cursor: pointer;">
-                        </a>
-                    </div>` : ''}
-                    ${b.receiptUrl ? `
-                    <div style="margin: 10px 0;">
-                        <p style="color: #4CAF50; font-weight: bold; margin-bottom: 6px;"><i class="fas fa-receipt"></i> إيصال فودافون كاش:</p>
-                        <a href="${b.receiptUrl}" target="_blank">
-                            <img src="${b.receiptUrl}" alt="إيصال التحويل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid #4CAF50; cursor: pointer;">
-                        </a>
-                    </div>` : ''}
-                    
-                    <div class="booking-actions">
-                        ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
-                        ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
-                    </div>
-                `;
-                content.appendChild(card);
+        if (bookingsInDay) {
+            const deviceGroups = {};
+            bookingsInDay.forEach(b => {
+                const groupKey = (b.specificDevice && b.specificDevice !== 'any') 
+                    ? b.specificDevice 
+                    : `جهاز غير محدد (${b.deviceType} - ${b.roomType})`;
+                if (!deviceGroups[groupKey]) deviceGroups[groupKey] = [];
+                deviceGroups[groupKey].push(b);
             });
-        });
+
+            Object.keys(deviceGroups).forEach(deviceKey => {
+                const groupHeader = document.createElement('h4');
+                groupHeader.style.color = 'var(--accent-neon)';
+                groupHeader.style.margin = '15px 0 10px 0';
+                groupHeader.style.borderBottom = '1px solid var(--glass-border)';
+                groupHeader.style.paddingBottom = '5px';
+                groupHeader.innerHTML = `<i class="fas fa-desktop"></i> ${deviceKey}`;
+                content.appendChild(groupHeader);
+                
+                deviceGroups[deviceKey].forEach(b => {
+                    const card = document.createElement('div');
+                    card.className = 'booking-card';
+                    card.innerHTML = `
+                        <h4>${b.name}</h4>
+                        <p><strong>رقم الهاتف:</strong> <a href="tel:${b.phone || ''}" style="color: var(--accent-neon); text-decoration: none; font-weight: bold;">${b.phone || 'غير مسجل'}</a> ${b.phone ? `<a href="https://wa.me/${b.phone.startsWith('0') ? '20' + b.phone.substring(1) : b.phone}" target="_blank" style="margin-right: 15px; color: #25D366; text-decoration: none; font-weight: bold;"><i class="fab fa-whatsapp"></i> واتساب</a>` : ''}</p>
+                        <p><strong>موعد الحجز:</strong> ${new Date(b.startTime).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})}</p>
+                        <p><strong>مدة الحجز:</strong> ${b.duration === 'open' ? 'مفتوح' : b.duration + ' ساعة'}</p>
+                        <p><strong>طريقة الدفع:</strong> ${b.paymentMethod === 'vodafone' ? 'فودافون كاش' : 'في المحل'} ${b.depositAmount > 0 ? `(مبلغ الحجز: ${b.depositAmount} ج)` : ''}</p>
+                        <p><strong>وضع اللعب:</strong> ${b.playMode === 'multi' ? 'مالتي (4 أفراد)' : 'فردي/زوجي'}</p>
+                        <p><strong>الحالة:</strong> ${statusMap[b.status] || b.status}</p>
+                        ${b.userPhotoUrl ? `
+                        <div style="margin: 10px 0;">
+                            <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 6px;"><i class="fas fa-id-badge"></i> صورة شخصية:</p>
+                            <a href="${b.userPhotoUrl}" target="_blank">
+                                <img src="${b.userPhotoUrl}" alt="صورة العميل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid var(--accent-neon); cursor: pointer;">
+                            </a>
+                        </div>` : ''}
+                        ${b.receiptUrl ? `
+                        <div style="margin: 10px 0;">
+                            <p style="color: #4CAF50; font-weight: bold; margin-bottom: 6px;"><i class="fas fa-receipt"></i> إيصال فودافون كاش:</p>
+                            <a href="${b.receiptUrl}" target="_blank">
+                                <img src="${b.receiptUrl}" alt="إيصال التحويل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid #4CAF50; cursor: pointer;">
+                            </a>
+                        </div>` : ''}
+                        
+                        <div class="booking-actions">
+                            ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
+                            ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
+                        </div>
+                    `;
+                    content.appendChild(card);
+                });
+            });
+        } else {
+            const archiveInfo = document.createElement('div');
+            archiveInfo.style.padding = '20px';
+            archiveInfo.style.color = 'var(--text-muted)';
+            archiveInfo.style.fontSize = '0.95rem';
+            archiveInfo.style.textAlign = 'center';
+            archiveInfo.innerHTML = `
+                <i class="fas fa-archive" style="font-size: 2rem; margin-bottom: 10px; display: block; color: var(--accent-neon);"></i>
+                تمت أرشفة تفاصيل هذا اليوم تلقائياً لتسريع أداء الموقع.<br>
+                <strong>إجمالي الحجوزات:</strong> ${bookingsCount} | 
+                <strong>إجمالي الساعات:</strong> ${dayTotalHours} س | 
+                <strong>إجمالي الدخل:</strong> ${dayTotalMoney} ج.م
+            `;
+            content.appendChild(archiveInfo);
+        }
         
         folder.appendChild(header);
         folder.appendChild(content);
+        if (!bookingsInDay) {
+            folder.classList.add('collapsed');
+            const icon = header.querySelector('.folder-icon');
+            icon.className = 'fas fa-folder folder-icon';
+        }
         container.appendChild(folder);
     });
     
-    const weekSummary = document.createElement('div');
-    weekSummary.className = 'glass-panel';
-    weekSummary.style.marginTop = '20px';
-    weekSummary.style.textAlign = 'center';
-    weekSummary.style.border = '1px solid rgba(0, 210, 255, 0.2)';
-    weekSummary.innerHTML = `
-        <h3 style="color: var(--accent-neon); margin-bottom: 20px; font-size: 1.3rem;">
-            <i class="fas fa-chart-pie"></i> إحصائيات الفترة (آخر 7 أيام)
+    // Calculate dynamic stats from globalDailyTotals
+    let weekHours = 0;
+    let weekMoney = 0;
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const currentBase = getWorkingDayBaseDate();
+    const curMonth = currentBase.getMonth();
+    const curYear = currentBase.getFullYear();
+    
+    let monthHours = 0;
+    let monthMoney = 0;
+
+    let lastMonth = curMonth - 1;
+    let lastYear = curYear;
+    if (lastMonth < 0) {
+        lastMonth = 11;
+        lastYear -= 1;
+    }
+    let prevMonthHours = 0;
+    let prevMonthMoney = 0;
+
+    const monthlySummaries = {};
+
+    Object.keys(globalDailyTotals).forEach(dayKey => {
+        const dt = globalDailyTotals[dayKey];
+        if (dt.dayStartTimestamp) {
+            const d = new Date(dt.dayStartTimestamp);
+            
+            // Last 7 days
+            if (dt.dayStartTimestamp >= oneWeekAgo) {
+                weekHours += dt.totalHours || 0;
+                weekMoney += dt.totalMoney || 0;
+            }
+            
+            // Current month
+            if (d.getMonth() === curMonth && d.getFullYear() === curYear) {
+                monthHours += dt.totalHours || 0;
+                monthMoney += dt.totalMoney || 0;
+            }
+            
+            // Last month
+            if (d.getMonth() === lastMonth && d.getFullYear() === lastYear) {
+                prevMonthHours += dt.totalHours || 0;
+                prevMonthMoney += dt.totalMoney || 0;
+            }
+
+            // Monthly summaries
+            const mKey = `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+            if (!monthlySummaries[mKey]) {
+                monthlySummaries[mKey] = {
+                    hours: 0,
+                    money: 0,
+                    label: d.toLocaleDateString('ar-EG', { year: 'numeric', month: 'long' })
+                };
+            }
+            monthlySummaries[mKey].hours += dt.totalHours || 0;
+            monthlySummaries[mKey].money += dt.totalMoney || 0;
+        }
+    });
+
+    const sortedMonthKeys = Object.keys(monthlySummaries).sort((a, b) => b.localeCompare(a));
+    let monthlyListHtml = '';
+    if (sortedMonthKeys.length === 0) {
+        monthlyListHtml = '<p class="text-muted" style="text-align:center; padding: 10px 0;">لا توجد شهور مؤرشفة بعد.</p>';
+    } else {
+        sortedMonthKeys.forEach(mKey => {
+            const summary = monthlySummaries[mKey];
+            monthlyListHtml += `
+                <div style="display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px dashed var(--glass-border);">
+                    <strong style="color: var(--accent-neon);">${summary.label}</strong>
+                    <span>${summary.hours.toFixed(1)} س | <span style="color: var(--success); font-weight: bold;">${summary.money} ج.م</span></span>
+                </div>
+            `;
+        });
+    }
+
+    const statsPanel = document.createElement('div');
+    statsPanel.className = 'glass-panel';
+    statsPanel.style.marginTop = '30px';
+    statsPanel.style.border = '1px solid rgba(0, 210, 255, 0.2)';
+    statsPanel.style.padding = '20px';
+    statsPanel.innerHTML = `
+        <h3 style="color: var(--accent-neon); margin-bottom: 20px; font-size: 1.3rem; text-align: center;">
+            <i class="fas fa-chart-line"></i> تقارير الأرباح والساعات
         </h3>
-        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; font-size: 1.1rem; font-weight: bold;">
-            <div style="background: rgba(0,210,255,0.08); padding: 15px 30px; border-radius: 12px; border: 1px solid rgba(0,210,255,0.4); min-width: 180px;">
-                <i class="fas fa-clock" style="color: var(--accent-neon); font-size: 1.8rem; margin-bottom: 12px; display: block;"></i> 
-                إجمالي الساعات<br><span style="font-size:1.8rem; color: #fff;">${weekTotalHours}</span>
+        
+        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; margin-bottom: 25px;">
+            <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 160px; text-align: center; flex: 1;">
+                <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">آخر 7 أيام</span>
+                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${weekHours.toFixed(1)} س</span>
+                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${weekMoney} ج.م</span>
             </div>
-            <div style="background: rgba(0,230,118,0.08); padding: 15px 30px; border-radius: 12px; border: 1px solid rgba(0,230,118,0.4); min-width: 180px;">
-                <i class="fas fa-money-bill-wave" style="color: var(--success); font-size: 1.8rem; margin-bottom: 12px; display: block;"></i> 
-                إجمالي الدخل<br><span style="font-size:1.8rem; color: #fff;">${weekTotalMoney} <span style="font-size: 1rem;">ج.م</span></span>
+            
+            <div style="background: rgba(0,230,118,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,230,118,0.3); min-width: 160px; text-align: center; flex: 1;">
+                <span style="font-size: 0.9rem; color: var(--success); display: block; margin-bottom: 5px; font-weight: bold;">الشهر الحالي</span>
+                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${monthHours.toFixed(1)} س</span>
+                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${monthMoney} ج.م</span>
+            </div>
+
+            <div style="background: rgba(255,196,0,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(255,196,0,0.3); min-width: 160px; text-align: center; flex: 1;">
+                <span style="font-size: 0.9rem; color: #ffc400; display: block; margin-bottom: 5px; font-weight: bold;">الشهر الماضي</span>
+                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${prevMonthHours.toFixed(1)} س</span>
+                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${prevMonthMoney} ج.م</span>
             </div>
         </div>
+
+        <h4 style="color: #fff; margin-bottom: 12px; font-size: 1.05rem; border-bottom: 1px solid var(--glass-border); padding-bottom: 6px;">
+            <i class="fas fa-history"></i> الأرشيف الشهري
+        </h4>
+        <div style="max-height: 180px; overflow-y: auto; font-size: 0.95rem;">
+            ${monthlyListHtml}
+        </div>
     `;
-    container.appendChild(weekSummary);
-}
+    container.appendChild(statsPanel);
 window.renderAdminBookings = renderAdminBookings;
 
 function updateConsoleField(index, fields) {
@@ -1018,7 +1196,24 @@ window.approveBooking = function(id) {
         return;
     }
     
-    update(ref(db, `bookings/${id}`), { status: 'approved' });
+    update(ref(db, `bookings/${id}`), { status: 'approved' }).then(() => {
+        if (booking.phone && booking.phone !== 'غير مسجل') {
+            const dateObj = new Date(booking.startTime);
+            const timeStr = dateObj.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            const deviceStr = booking.specificDevice && booking.specificDevice !== 'any' ? booking.specificDevice : 'أي جهاز متاح';
+            const durationStr = booking.duration === 'open' ? 'مفتوح' : `${booking.duration} ساعة`;
+            
+            const message = `مرحباً ${booking.name}،\n\nتم تأكيد حجزك بنجاح في R2 PlayStation:\n🎮 الجهاز: ${deviceStr} (${booking.deviceType})\n📍 المكان: ${booking.roomType}\n⏰ وقت البدء: اليوم - ${timeStr}\n⏱️ المدة: ${durationStr}\n\nنتمنى لك وقتاً ممتعاً! ❤️`;
+            
+            let formattedPhone = booking.phone.trim();
+            if (formattedPhone.startsWith('0')) {
+                formattedPhone = '20' + formattedPhone.substring(1);
+            }
+            
+            const waUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
+            window.open(waUrl, '_blank');
+        }
+    });
 };
 
 window.cancelBooking = function(id) {
@@ -1370,6 +1565,9 @@ window.initApp = function(firebaseServices) {
             const data = snap.val();
             globalBookings = Object.keys(data).map(k => ({ id: k, ...data[k] }));
 
+            // Save daily totals for all days represented in active bookings
+            saveDailyTotalsFromBookings(globalBookings);
+
             // Auto-cleanup bookings older than 7 days
             const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
             globalBookings.forEach(b => {
@@ -1383,8 +1581,25 @@ window.initApp = function(firebaseServices) {
         } else {
             globalBookings = [];
         }
-        if (window._isAdmin) renderAdminBookings();
+        renderConsoles();
+        if (window._isAdmin) {
+            renderAdminBookings();
+            renderAdminConsoles();
+        }
         updateTimeSlotsDropdown();
+    });
+
+    // Realtime daily totals
+    const dailyTotalsRef = ref(db, 'daily_totals');
+    onValue(dailyTotalsRef, snap => {
+        if (snap.exists()) {
+            globalDailyTotals = snap.val();
+        } else {
+            globalDailyTotals = {};
+        }
+        if (window._isAdmin) {
+            renderAdminBookings();
+        }
     });
 
     // Login form
