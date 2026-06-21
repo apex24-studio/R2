@@ -55,7 +55,7 @@ function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roo
     const end = startTime + duration * 3600 * 1000;
     
     const overlappingBookings = globalBookings.filter(b => {
-        if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+        if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
         
         const bStart = b.actualStartTime || b.startTime;
         const bDuration = b.duration === 'open' ? 24 : b.duration;
@@ -172,31 +172,53 @@ function getDeviceHourlyStatus(device) {
 
         // التحقق من الحجوزات المرتبطة بهذا الجهاز
         // pending_payment يُظهر الوقت محجوزاً فوراً بمجرد تسجيل الطلب
+        // التحقق من الحجوزات المرتبطة بهذا الجهاز (سواء صريحة أو عائمة)
         if (!isBooked) {
-            isBooked = globalBookings.some(b => {
-                if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
-
+            const dName = (device.name || '').trim();
+            const overlappingBookings = globalBookings.filter(b => {
+                if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
                 const bStart = Number(b.startTime);
                 const bDuration = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
                 const bEnd = bStart + bDuration * 3600 * 1000;
-
-                // تحقق من التداخل الزمني بدون هامش كبير
-                if (!(slotStart < bEnd && slotEnd > bStart)) return false;
-
-                const bDevice = (b.specificDevice || '').trim();
-                const dName = (device.name || '').trim();
-
-                if (bDevice && bDevice !== 'any') {
-                    return bDevice === dName;
-                } else {
-                    // حجز عائم (أقرب جهاز متاح)
-                    if (b.roomType === device.location && b.deviceType === device.type) {
-                        const devicesInRoom = globalConsoles.filter(c => c && c.location === b.roomType && c.type === b.deviceType);
-                        if (devicesInRoom.length === 1) return true;
-                    }
-                    return false;
-                }
+                return (slotStart < bEnd && slotEnd > bStart);
             });
+
+            // هل الجهاز محجوز بشكل صريح؟
+            isBooked = overlappingBookings.some(b => {
+                const bDevice = (b.specificDevice || '').trim();
+                return bDevice === dName;
+            });
+
+            // لو مش محجوز بشكل صريح، نوزع الحجوزات العائمة على الأجهزة المتاحة
+            if (!isBooked) {
+                const floatingBookings = overlappingBookings.filter(b => {
+                    const bDevice = (b.specificDevice || '').trim();
+                    return (!bDevice || bDevice === 'any') && b.roomType === device.location && b.deviceType === device.type;
+                });
+
+                if (floatingBookings.length > 0) {
+                    const devicesInRoom = globalConsoles.filter(c => c && c.location === device.location && c.type === device.type);
+                    
+                    const unbookedDevices = devicesInRoom.filter(c => {
+                        const cName = (c.name || '').trim();
+                        if (c.activeTimer) {
+                            const timerStart = c.activeTimer.startTime || now;
+                            if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
+                                if (slotStart >= timerStart) return false;
+                            } else if (c.activeTimer.endTime) {
+                                if (slotStart < c.activeTimer.endTime && slotEnd > timerStart) return false;
+                            }
+                        }
+                        return !overlappingBookings.some(b => (b.specificDevice || '').trim() === cName);
+                    });
+
+                    // إذا كان الجهاز من ضمن الأجهزة التي سيقع عليها الحجز العائم
+                    const myIndexInUnbooked = unbookedDevices.findIndex(c => (c.name || '').trim() === dName);
+                    if (myIndexInUnbooked !== -1 && myIndexInUnbooked < floatingBookings.length) {
+                        isBooked = true;
+                    }
+                }
+            }
         }
 
         // Label
@@ -282,9 +304,8 @@ function updateTimeSlotsDropdown() {
         }
     });
 
-    // 2. Dynamic slots from end times of active/approved bookings
     globalBookings.forEach(b => {
-        if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'pending_payment') {
+        if (b.status === 'approved' || b.status === 'active_in_store') {
             // Only collect end times of bookings that match the selected room and device type
             if (b.roomType !== roomType || b.deviceType !== deviceType) {
                 return;
@@ -766,7 +787,7 @@ window.startTimer = function(index) {
         // Check if the extension causes an overlap/conflict with upcoming bookings
         const overlappingBookings = globalBookings.filter(b => {
             if (b.id === existingBookingId) return false;
-            if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+            if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
             
             const bStart = b.startTime;
             const bDuration = b.duration === 'open' ? 24 : b.duration;
@@ -829,7 +850,7 @@ window.startTimer = function(index) {
         const storeClosingTime = baseWorkingDate.getTime() + 27 * 3600 * 1000; // 3 AM next day
         
         const upcomingBooking = globalBookings.find(b => {
-            if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+            if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
             if (b.specificDevice !== c.name) return false;
             return (b.startTime > Date.now() && b.startTime < storeClosingTime);
         });
@@ -847,7 +868,7 @@ window.startTimer = function(index) {
         
         // Check for conflicts with this duration
         const overlappingBookings = globalBookings.filter(b => {
-            if (b.status !== 'approved' && b.status !== 'active_in_store' && b.status !== 'pending_payment') return false;
+            if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
             
             const bStart = b.startTime;
             const bDuration = b.duration === 'open' ? 24 : b.duration;
