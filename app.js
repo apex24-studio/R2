@@ -640,7 +640,6 @@ function renderAdminBookings() {
             const groupKey = (b.specificDevice && b.specificDevice !== 'any') 
                 ? b.specificDevice 
                 : `جهاز غير محدد (${b.deviceType} - ${b.roomType})`;
-            
             if (!deviceGroups[groupKey]) deviceGroups[groupKey] = [];
             deviceGroups[groupKey].push(b);
         });
@@ -656,45 +655,9 @@ function renderAdminBookings() {
             
             deviceGroups[deviceKey].forEach(b => {
                 const now = Date.now();
-                const durationNum = b.duration === 'open' ? 1 : b.duration;
-                const gracePeriodMs = (durationNum / 2) * 3600 * 1000;
-                const bStart = b.startTime;
-                const timeElapsedSinceStart = now - bStart; // الوقت اللي فات من موعد الحجز الفعلي
                 
-                // زرار إضافة الوقت المتبقي: يظهر لو الحجز نشط (مهلة الحضور شغالة) ولم يمتد بعد
-                let extendBtnHtml = '';
-                if (b.status === 'active_in_store' && !b.extended) {
-                    if (b.duration === 'open') {
-                        extendBtnHtml = `
-                            <div style="background: rgba(0,210,255,0.08); border: 1px solid var(--accent-neon); border-radius: 8px; padding: 10px; margin: 8px 0;">
-                                <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 8px;">
-                                    <i class="fas fa-user-check"></i> العميل حضر – تفعيل العداد المفتوح
-                                </p>
-                                <button class="btn btn-small btn-primary" onclick="window.extendBookingTime('${b.id}')">
-                                    <i class="fas fa-play"></i> تفعيل الوقت المفتوح
-                                </button>
-                            </div>
-                        `;
-                    } else {
-                        const fullBookingEndMs = bStart + (b.duration * 3600 * 1000);
-                        const remainingMs = Math.max(0, fullBookingEndMs - now);
-                        if (remainingMs > 60000) {
-                            const remainingMins = Math.floor(remainingMs / 60000);
-                            const pricePerHour = (b.playMode === 'multi') ? 50 : (PRICES[b.deviceType] || 40);
-                            const fullCost = pricePerHour * b.duration;
-                            extendBtnHtml = `
-                                <div style="background: rgba(0,210,255,0.08); border: 1px solid var(--accent-neon); border-radius: 8px; padding: 10px; margin: 8px 0;">
-                                    <p style="color: var(--accent-neon); font-weight: bold; margin-bottom: 8px;">
-                                        <i class="fas fa-user-check"></i> العميل حضر – يمكن إضافة ${remainingMins} دقيقة (إجمالي: ${fullCost} ج.م)
-                                    </p>
-                                    <button class="btn btn-small btn-primary" onclick="window.extendBookingTime('${b.id}')">
-                                        <i class="fas fa-plus-circle"></i> إضافة الوقت المتبقي (${remainingMins} دقيقة)
-                                    </button>
-                                </div>
-                            `;
-                        }
-                    }
-                }
+                // زرار إضافة الوقت المتبقي: (تم إلغاء مهلة الحضور - لم يعد هناك حاجة لهذا الزر)
+
                 
                 const card = document.createElement('div');
                 card.className = 'booking-card';
@@ -720,7 +683,7 @@ function renderAdminBookings() {
                             <img src="${b.receiptUrl}" alt="إيصال التحويل" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid #4CAF50; cursor: pointer;">
                         </a>
                     </div>` : ''}
-                    ${extendBtnHtml}
+                    
                     <div class="booking-actions">
                         ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
                         ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
@@ -1210,7 +1173,8 @@ function updatePaymentInstructions() {
     }
 
     const durationRaw = durationEl ? durationEl.value : '1';
-    const duration = durationRaw === 'open' ? 1 : parseFloat(durationRaw) || 1;
+    // وقت مفتوح يُحسب كساعتين
+    const duration = durationRaw === 'open' ? 2 : parseFloat(durationRaw) || 1;
     const playModeEl = document.getElementById('play-mode');
     const playMode = playModeEl ? playModeEl.value : 'single';
     let pricePerHour = PRICES[deviceType] || 40;
@@ -1246,7 +1210,44 @@ function updatePaymentInstructions() {
 }
 window.updatePaymentInstructionsGlobal = updatePaymentInstructions;
 
-// Image compression using Canvas API
+// تحويل الصورة إلى base64 مضغوطة وتخزينها مباشرة في قاعدة البيانات (بدون Firebase Storage)
+function imageToBase64(file, maxWidth = 400, maxHeight = 400, quality = 0.65) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const img = new Image();
+            img.onload = function() {
+                let { width, height } = img;
+
+                // تصغير الصورة لتقليل الحجم (ماكس 400×400 بجودة 65%)
+                if (width > maxWidth || height > maxHeight) {
+                    const ratio = Math.min(maxWidth / width, maxHeight / height);
+                    width = Math.round(width * ratio);
+                    height = Math.round(height * ratio);
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                if (!dataUrl || dataUrl === 'data:,') {
+                    reject(new Error('فشل تحويل الصورة'));
+                    return;
+                }
+                resolve(dataUrl);
+            };
+            img.onerror = () => reject(new Error('فشل تحميل ملف الصورة. تأكد أن الملف صورة صحيحة.'));
+            img.src = e.target.result;
+        };
+        reader.onerror = () => reject(new Error('فشل قراءة الملف.'));
+        reader.readAsDataURL(file);
+    });
+}
+
+// Image compression using Canvas API (محتفظ للاستخدام الداخلي إن لزم)
 function compressImage(file, maxWidth = 800, maxHeight = 800, quality = 0.7) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -1439,7 +1440,7 @@ window.initApp = function(firebaseServices) {
             const playMode = playModeEl3 ? playModeEl3.value : 'single';
 
             // Full booking amount
-            const durationNum = duration === 'open' ? 1 : duration;
+            const durationNum = duration === 'open' ? 2 : duration;
             let pricePerHour = PRICES[deviceType] || 40;
             if (playMode === 'multi') pricePerHour = 50;
             const fullAmount = pricePerHour * durationNum;
@@ -1460,82 +1461,37 @@ window.initApp = function(firebaseServices) {
                 return;
             }
 
-            if (submitBtn) { submitBtn.disabled = true; submitBtn.innerText = 'جارٍ ضغط ورفع الصور...'; }
-            if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--accent-neon)'; fb.innerText = 'جارٍ ضغط ورفع الصور، يرجى الانتظار...'; }
-
-            // التحقق من توفر خدمة Firebase Storage قبل البدء
-            if (!storage || !sRef || !uploadBytes || !getDownloadURL) {
-                if (fb) { fb.style.display = 'block'; fb.style.color = 'var(--danger)'; fb.innerText = 'خطأ: خدمة رفع الصور غير متاحة. يرجى تحديث الصفحة والمحاولة مجدداً.'; }
-                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerText = 'تأكيد الحجز المسبق'; }
-                return;
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.innerText = 'جارٍ معالجة الصورة...'; }
+            if (fb) {
+                fb.style.display = 'block';
+                fb.style.color = 'var(--accent-neon)';
+                fb.innerText = 'جارٍ معالجة الصورة، يرجى الانتظار...';
             }
 
             try {
-                // ضغط ورفع الصورة الشخصية
-                const photoId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-
-                if (fb) fb.innerText = '📸 جارٍ ضغط الصورة الشخصية...';
-                let compressedPhoto;
-                try {
-                    compressedPhoto = await compressImage(userPhotoFile, 800, 800, 0.7);
-                } catch (compErr) {
-                    throw new Error('فشل ضغط الصورة الشخصية: ' + (compErr.message || 'خطأ غير معروف'));
-                }
-
-                if (fb) fb.innerText = '⬆️ جارٍ رفع الصورة الشخصية...';
+                // تحويل الصورة الشخصية إلى base64
+                if (fb) fb.innerText = 'جارٍ ضغط الصورة الشخصية...';
                 let userPhotoUrl;
                 try {
-                    const photoRef = sRef(storage, `booking_photos/${photoId}_photo.jpg`);
-                    const photoSnapshot = await uploadBytes(photoRef, compressedPhoto);
-                    userPhotoUrl = await getDownloadURL(photoSnapshot.ref);
-                } catch (uploadErr) {
-                    console.error('Photo upload error:', uploadErr);
-                    let uploadMsg = 'فشل رفع الصورة الشخصية.';
-                    if (uploadErr.code === 'storage/unauthorized') {
-                        uploadMsg += ' غير مصرح برفع الملفات – يرجى التواصل مع الإدارة.';
-                    } else if (uploadErr.code === 'storage/quota-exceeded') {
-                        uploadMsg += ' تجاوز الحد المسموح به للتخزين.';
-                    } else if (uploadErr.message && uploadErr.message.includes('network')) {
-                        uploadMsg += ' تحقق من اتصالك بالإنترنت.';
-                    } else {
-                        uploadMsg += ' يرجى المحاولة مجدداً. (كود الخطأ: ' + (uploadErr.code || 'unknown') + ')';
-                    }
-                    throw new Error(uploadMsg);
+                    userPhotoUrl = await imageToBase64(userPhotoFile, 400, 400, 0.65);
+                } catch (err) {
+                    throw new Error('فشل تحويل الصورة الشخصية: ' + err.message);
                 }
 
-                // ضغط ورفع إيصال فودافون كاش إن وجد
+                // تحويل صورة التحويل إلى base64 (إن وجدت)
                 let receiptUrl = null;
                 if (paymentMethod === 'vodafone' && receiptFile) {
-                    if (fb) fb.innerText = '📄 جارٍ ضغط صورة التحويل...';
-                    let compressedReceipt;
+                    if (fb) fb.innerText = 'جارٍ ضغط صورة التحويل...';
                     try {
-                        compressedReceipt = await compressImage(receiptFile, 1000, 1000, 0.75);
-                    } catch (compErr) {
-                        throw new Error('فشل ضغط صورة التحويل: ' + (compErr.message || 'خطأ غير معروف'));
-                    }
-
-                    if (fb) fb.innerText = '⬆️ جارٍ رفع صورة التحويل...';
-                    try {
-                        const receiptRef = sRef(storage, `booking_photos/${photoId}_receipt.jpg`);
-                        const receiptSnapshot = await uploadBytes(receiptRef, compressedReceipt);
-                        receiptUrl = await getDownloadURL(receiptSnapshot.ref);
-                    } catch (uploadErr) {
-                        console.error('Receipt upload error:', uploadErr);
-                        let uploadMsg = 'فشل رفع صورة التحويل.';
-                        if (uploadErr.code === 'storage/unauthorized') {
-                            uploadMsg += ' غير مصرح برفع الملفات.';
-                        } else if (uploadErr.message && uploadErr.message.includes('network')) {
-                            uploadMsg += ' تحقق من اتصالك بالإنترنت.';
-                        } else {
-                            uploadMsg += ' يرجى المحاولة مجدداً. (كود الخطأ: ' + (uploadErr.code || 'unknown') + ')';
-                        }
-                        throw new Error(uploadMsg);
+                        receiptUrl = await imageToBase64(receiptFile, 600, 600, 0.7);
+                    } catch (err) {
+                        throw new Error('فشل تحويل صورة التحويل: ' + err.message);
                     }
                 }
 
-                if (fb) fb.innerText = '💾 جارٍ حفظ بيانات الحجز...';
+                if (fb) fb.innerText = 'جارٍ حفظ بيانات الحجز...';
 
-                // حفظ الحجز في قاعدة البيانات
+                // حفظ الحجز في قاعدة البيانات (الصور مخزنة كـ base64 داخل الحجز)
                 await push(bookingsRef, {
                     name, phone, deviceType, specificDevice, roomType, playMode,
                     startTime, duration, paymentMethod,
@@ -1549,10 +1505,9 @@ window.initApp = function(firebaseServices) {
                 if (fb) {
                     fb.style.display = 'block';
                     fb.style.color = 'var(--success)';
-                    fb.innerHTML = '✅ تم تسجيل طلب الحجز بنجاح! يتم تحويلك الآن للواتساب لإعلامنا...';
+                    fb.innerHTML = '✅ تم تسجيل طلب الحجز بنجاح! يتم تحويلك للواتساب...';
                 }
 
-                // إعادة التوجيه للواتساب
                 const msg = `مرحباً، قمت بحجز جديد وأريد تأكيده:\nالاسم: ${name}\nرقم الهاتف: ${phone}\nالمكان: ${roomType}\nالمدة: ${duration === 'open' ? 'مفتوح' : duration + ' ساعة'}\nوقت الحجز: ${new Date(startTime).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'})}\nطريقة الدفع: ${paymentMethod === 'vodafone' ? 'فودافون كاش' : 'في المحل'}\nالمبلغ: ${fullAmount} جنيه`;
                 const waUrl = `https://wa.me/201023402968?text=${encodeURIComponent(msg)}`;
                 window.open(waUrl, '_blank');
@@ -1565,11 +1520,11 @@ window.initApp = function(firebaseServices) {
                 if (receiptGroupEl) receiptGroupEl.style.display = 'none';
 
             } catch (err) {
-                console.error('Booking submission error:', err);
+                console.error('Booking error:', err);
                 if (fb) {
                     fb.style.display = 'block';
                     fb.style.color = 'var(--danger)';
-                    fb.innerText = '❌ ' + (err.message || 'حدث خطأ غير متوقع أثناء الحجز. يرجى المحاولة مجدداً.');
+                    fb.innerText = '❌ ' + (err.message || 'حدث خطأ غير متوقع. يرجى المحاولة مجدداً.');
                 }
             } finally {
                 if (submitBtn) { submitBtn.disabled = false; submitBtn.innerText = 'تأكيد الحجز المسبق'; }
