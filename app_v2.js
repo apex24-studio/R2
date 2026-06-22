@@ -922,6 +922,7 @@ function renderAdminBookings() {
         </div>
     `;
     container.appendChild(statsPanel);
+}
 window.renderAdminBookings = renderAdminBookings;
 
 function updateConsoleField(index, fields) {
