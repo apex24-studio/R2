@@ -38,7 +38,14 @@ function formatTimeLeft(endTime) {
 function getDayKey(timestamp) {
     if (!timestamp) return "حجوزات غير محددة التاريخ";
     const date = new Date(timestamp);
-    return date.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    let key = date.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    // Normalize: remove Arabic commas, collapse spaces, convert Eastern digits to Western
+    key = key.replace(/،/g, '').replace(/\s+/g, ' ').trim();
+    const easternDigits = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
+    easternDigits.forEach((d, i) => { key = key.replace(new RegExp(d, 'g'), i); });
+    // Normalize hamza variants (الإثنين ↔ الاثنين, etc.)
+    key = key.replace(/الإثنين/g, 'الاثنين');
+    return key;
 }
 
 function getWorkingDayBaseDate() {
@@ -682,6 +689,8 @@ function renderAdminBookings() {
 
     sortedDayKeys.forEach(dayKey => {
         const bookingsInDay = groups[dayKey];
+        if (!bookingsInDay || bookingsInDay.length === 0) return; // Skip rendering empty/archived days in the accordion
+
         const folder = document.createElement('div');
         folder.className = 'day-folder';
         
@@ -782,38 +791,26 @@ function renderAdminBookings() {
                     content.appendChild(card);
                 });
             });
-        } else {
-            const archiveInfo = document.createElement('div');
-            archiveInfo.style.padding = '20px';
-            archiveInfo.style.color = 'var(--text-muted)';
-            archiveInfo.style.fontSize = '0.95rem';
-            archiveInfo.style.textAlign = 'center';
-            archiveInfo.innerHTML = `
-                <i class="fas fa-archive" style="font-size: 2rem; margin-bottom: 10px; display: block; color: var(--accent-neon);"></i>
-                تمت أرشفة تفاصيل هذا اليوم تلقائياً لتسريع أداء الموقع.<br>
-                <strong>إجمالي الحجوزات:</strong> ${bookingsCount} | 
-                <strong>إجمالي الساعات:</strong> ${dayTotalHours} س | 
-                <strong>إجمالي الدخل:</strong> ${dayTotalMoney} ج.م
-            `;
-            content.appendChild(archiveInfo);
         }
         
         folder.appendChild(header);
         folder.appendChild(content);
-        if (!bookingsInDay) {
-            folder.classList.add('collapsed');
-            const icon = header.querySelector('.folder-icon');
-            icon.className = 'fas fa-folder folder-icon';
-        }
         container.appendChild(folder);
     });
     
     // Calculate dynamic stats from globalDailyTotals
-    let weekHours = 0;
-    let weekMoney = 0;
+    let currentWeekHours = 0;
+    let currentWeekMoney = 0;
+    let last7DaysHours = 0;
+    let last7DaysMoney = 0;
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
     const currentBase = getWorkingDayBaseDate();
+    const dayOfWeek = currentBase.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    const sundayBase = new Date(currentBase.getTime());
+    sundayBase.setDate(currentBase.getDate() - dayOfWeek);
+    const startOfWeekTimestamp = sundayBase.getTime();
+
     const curMonth = currentBase.getMonth();
     const curYear = currentBase.getFullYear();
     
@@ -831,15 +828,45 @@ function renderAdminBookings() {
 
     const monthlySummaries = {};
 
+    const normalizedTotals = {};
     Object.keys(globalDailyTotals).forEach(dayKey => {
         const dt = globalDailyTotals[dayKey];
+        if (dt) {
+            let normKey = dayKey.replace(/،/g, '').replace(/\s+/g, ' ').trim();
+            const easternDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+            for (let i = 0; i < 10; i++) {
+                normKey = normKey.replace(new RegExp(easternDigits[i], 'g'), i);
+            }
+            // Normalize hamza variants
+            normKey = normKey.replace(/الإثنين/g, 'الاثنين');
+            if (!normalizedTotals[normKey]) {
+                normalizedTotals[normKey] = dt;
+            } else {
+                const existing = normalizedTotals[normKey];
+                const existingTime = existing.lastUpdated || 0;
+                const newTime = dt.lastUpdated || 0;
+                if (newTime > existingTime || (newTime === existingTime && (dt.totalMoney || 0) > (existing.totalMoney || 0))) {
+                    normalizedTotals[normKey] = dt;
+                }
+            }
+        }
+    });
+
+    Object.keys(normalizedTotals).forEach(dayKey => {
+        const dt = normalizedTotals[dayKey];
         if (dt.dayStartTimestamp) {
             const d = new Date(dt.dayStartTimestamp);
             
-            // Last 7 days
+            // Current week (starting Sunday)
+            if (dt.dayStartTimestamp >= startOfWeekTimestamp) {
+                currentWeekHours += dt.totalHours || 0;
+                currentWeekMoney += dt.totalMoney || 0;
+            }
+
+            // Last 7 days (rolling)
             if (dt.dayStartTimestamp >= oneWeekAgo) {
-                weekHours += dt.totalHours || 0;
-                weekMoney += dt.totalMoney || 0;
+                last7DaysHours += dt.totalHours || 0;
+                last7DaysMoney += dt.totalMoney || 0;
             }
             
             // Current month
@@ -895,19 +922,25 @@ function renderAdminBookings() {
         </h3>
         
         <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; margin-bottom: 25px;">
-            <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 160px; text-align: center; flex: 1;">
+            <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 150px; text-align: center; flex: 1;">
+                <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">الأسبوع الحالي</span>
+                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${currentWeekHours.toFixed(1)} س</span>
+                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${currentWeekMoney} ج.م</span>
+            </div>
+
+            <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 150px; text-align: center; flex: 1;">
                 <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">آخر 7 أيام</span>
-                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${weekHours.toFixed(1)} س</span>
-                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${weekMoney} ج.م</span>
+                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${last7DaysHours.toFixed(1)} س</span>
+                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${last7DaysMoney} ج.م</span>
             </div>
             
-            <div style="background: rgba(0,230,118,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,230,118,0.3); min-width: 160px; text-align: center; flex: 1;">
+            <div style="background: rgba(0,230,118,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,230,118,0.3); min-width: 150px; text-align: center; flex: 1;">
                 <span style="font-size: 0.9rem; color: var(--success); display: block; margin-bottom: 5px; font-weight: bold;">الشهر الحالي</span>
                 <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${monthHours.toFixed(1)} س</span>
                 <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${monthMoney} ج.م</span>
             </div>
 
-            <div style="background: rgba(255,196,0,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(255,196,0,0.3); min-width: 160px; text-align: center; flex: 1;">
+            <div style="background: rgba(255,196,0,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(255,196,0,0.3); min-width: 150px; text-align: center; flex: 1;">
                 <span style="font-size: 0.9rem; color: #ffc400; display: block; margin-bottom: 5px; font-weight: bold;">الشهر الماضي</span>
                 <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${prevMonthHours.toFixed(1)} س</span>
                 <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${prevMonthMoney} ج.م</span>
@@ -1569,14 +1602,23 @@ window.initApp = function(firebaseServices) {
             // Save daily totals for all days represented in active bookings
             saveDailyTotalsFromBookings(globalBookings);
 
-            // Auto-cleanup bookings older than 7 days
-            const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            // Auto-cleanup bookings: keep only the current week starting from Sunday.
+            // Any bookings from previous weeks (before Sunday 3:00 AM working day) are deleted.
+            const currentBase = getWorkingDayBaseDate();
+            const dayOfWeek = currentBase.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+            const sundayBase = new Date(currentBase.getTime());
+            sundayBase.setDate(currentBase.getDate() - dayOfWeek);
+            const keepThreshold = sundayBase.getTime();
+            
             globalBookings.forEach(b => {
-                const bookingTime = b.createdAt || b.startTime;
-                if (bookingTime && bookingTime < oneWeekAgo) {
-                    set(ref(db, `bookings/${b.id}`), null).catch(err => {
-                        console.warn("Failed to auto-delete old booking:", err);
-                    });
+                const bookingTime = b.startTime || b.createdAt;
+                if (bookingTime) {
+                    const bBaseTime = getWorkingDayBaseDateFor(bookingTime).getTime();
+                    if (bBaseTime < keepThreshold) {
+                        set(ref(db, `bookings/${b.id}`), null).catch(err => {
+                            console.warn("Failed to auto-delete old booking:", err);
+                        });
+                    }
                 }
             });
         } else {
