@@ -804,11 +804,15 @@ h1, h2, h3 {
     inset: 0;
     z-index: 99999;
     background: radial-gradient(ellipse at center, #0a0a0f 0%, #000000 100%);
-    display: flex;
+    display: none;
     align-items: center;
     justify-content: center;
     padding: 20px;
     animation: overlayFadeIn 0.6s ease forwards;
+}
+
+.power-outage-overlay.active {
+    display: flex;
 }
 
 @keyframes overlayFadeIn {

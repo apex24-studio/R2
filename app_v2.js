@@ -10,8 +10,10 @@ let db, auth, storage, ref, onValue, set, get, push, update,
 let globalConsoles = [];
 let globalBookings = [];
 let globalDailyTotals = {};
+let globalWeeklySnapshots = {};
 let globalEmergencyMode = false;
 let globalEmergencyStartTime = 0;
+let globalBookingsEnabled = true; // يتحكم فيه الأدمين من لوحة التحكم
 
 const PRICES = { PS4: 40, PS5: 60 };
 const PAYMENT_NUMBERS = {
@@ -79,13 +81,13 @@ function getWorkingDayBaseDateFor(timestamp) {
 
 function saveDailyTotalsFromBookings(bookings) {
     if (!bookings || bookings.length === 0) return;
-    
+
     const daysToUpdate = {};
     bookings.forEach(b => {
         if (b.status === 'cancelled') return;
         const baseDate = getWorkingDayBaseDateFor(b.startTime);
         const dayKey = getDayKey(baseDate.getTime());
-        
+
         if (!daysToUpdate[dayKey]) {
             daysToUpdate[dayKey] = {
                 totalHours: 0,
@@ -94,7 +96,7 @@ function saveDailyTotalsFromBookings(bookings) {
                 dayStartTimestamp: baseDate.getTime()
             };
         }
-        
+
         daysToUpdate[dayKey].count++;
         if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow' || b.status === 'cancelled_with_fee') {
             const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
@@ -103,17 +105,89 @@ function saveDailyTotalsFromBookings(bookings) {
         }
     });
 
+    // ✅ MAX-MERGE: نقرأ البيانات الموجودة أولاً، ونكتب الأكبر دائماً — لا شيء يُمسح
     Object.keys(daysToUpdate).forEach(dayKey => {
         const dtRef = ref(db, `daily_totals/${dayKey}`);
-        set(dtRef, {
-            totalHours: parseFloat(daysToUpdate[dayKey].totalHours.toFixed(2)),
-            totalMoney: Math.ceil(daysToUpdate[dayKey].totalMoney),
-            count: daysToUpdate[dayKey].count,
-            dayStartTimestamp: daysToUpdate[dayKey].dayStartTimestamp,
-            lastUpdated: Date.now()
+        const newData = daysToUpdate[dayKey];
+        get(dtRef).then(snap => {
+            const existing = snap.exists() ? snap.val() : null;
+            const mergedHours = existing
+                ? Math.max(parseFloat(existing.totalHours || 0), parseFloat(newData.totalHours.toFixed(2)))
+                : parseFloat(newData.totalHours.toFixed(2));
+            const mergedMoney = existing
+                ? Math.max(parseInt(existing.totalMoney || 0), Math.ceil(newData.totalMoney))
+                : Math.ceil(newData.totalMoney);
+            const mergedCount = existing
+                ? Math.max(parseInt(existing.count || 0), newData.count)
+                : newData.count;
+
+            return set(dtRef, {
+                totalHours: mergedHours,
+                totalMoney: mergedMoney,
+                count: mergedCount,
+                dayStartTimestamp: newData.dayStartTimestamp,
+                lastUpdated: Date.now()
+            });
         }).catch(err => {
             console.warn(`Failed to save daily totals for ${dayKey}:`, err);
         });
+    });
+}
+
+// ✅ حفظ snapshot أسبوعي ثابت — يُستدعى عند أول تشغيل في أسبوع جديد
+function maybeArchiveLastWeekSnapshot() {
+    if (!db) return;
+    const now = Date.now();
+    const currentBase = getWorkingDayBaseDate();
+    const dayOfWeek = currentBase.getDay(); // 0=Sun
+    const sundayBase = new Date(currentBase.getTime());
+    sundayBase.setDate(currentBase.getDate() - dayOfWeek);
+    const startOfCurrentWeek = sundayBase.getTime();
+
+    // مفتاح الأسبوع الحالي بصيغة YYYY-Www
+    const weekKey = (() => {
+        const d = new Date(startOfCurrentWeek);
+        const year = d.getFullYear();
+        const startOfYear = new Date(year, 0, 1);
+        const weekNum = Math.ceil(((d - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+        return `${year}-W${weekNum.toString().padStart(2, '0')}`;
+    })();
+
+    const snapshotRef = ref(db, `weekly_snapshots/${weekKey}`);
+    get(snapshotRef).then(snap => {
+        // إذا الـ snapshot الأسبوع الحالي موجود، لا نفعل شيئاً
+        if (snap.exists()) return;
+
+        // احسب مجموع الأسبوع الماضي من daily_totals
+        const lastWeekStart = startOfCurrentWeek - 7 * 24 * 3600 * 1000;
+        let totalHours = 0;
+        let totalMoney = 0;
+        let totalCount = 0;
+
+        Object.values(globalDailyTotals || {}).forEach(dt => {
+            const ts = dt.dayStartTimestamp || 0;
+            if (ts >= lastWeekStart && ts < startOfCurrentWeek) {
+                totalHours += dt.totalHours || 0;
+                totalMoney += dt.totalMoney || 0;
+                totalCount += dt.count || 0;
+            }
+        });
+
+        if (totalHours === 0 && totalMoney === 0) return; // لا نحفظ أسابيع فارغة
+
+        const prevSundayDate = new Date(lastWeekStart);
+        const prevSatDate = new Date(startOfCurrentWeek - 1);
+        const label = `${prevSundayDate.toLocaleDateString('ar-EG', {day:'numeric',month:'short'})} – ${prevSatDate.toLocaleDateString('ar-EG', {day:'numeric',month:'short',year:'numeric'})}`;
+
+        set(snapshotRef, {
+            weekKey,
+            label,
+            totalHours: parseFloat(totalHours.toFixed(2)),
+            totalMoney: Math.ceil(totalMoney),
+            totalCount,
+            weekStartTimestamp: lastWeekStart,
+            savedAt: now
+        }).catch(err => console.warn('Failed to save weekly snapshot:', err));
     });
 }
 
@@ -121,6 +195,17 @@ function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roo
     const duration = durationRaw === 'open' ? 24 : parseFloat(durationRaw) || 1;
     const start = startTime;
     const end = startTime + duration * 3600 * 1000;
+
+    // ❌ رفض أي حجز تمتد نهايته بعد وقت إغلاق المحل (3:00 صباحاً)
+    if (durationRaw !== 'open') {
+        const closingCheck = new Date(startTime);
+        // إذا كان وقت البداية بعد الساعة 3 صباحاً نحسب الإغلاق لليوم التالي
+        if (closingCheck.getHours() >= 3) {
+            closingCheck.setDate(closingCheck.getDate() + 1);
+        }
+        closingCheck.setHours(3, 0, 0, 0);
+        if (end > closingCheck.getTime()) return false;
+    }
     
     const dbRoomName = roomType;
     const matchingDevices = globalConsoles.filter(c => c && c.type === deviceType && c.location === dbRoomName);
@@ -870,164 +955,164 @@ function renderAdminBookings() {
         container.appendChild(folder);
     });
     
-    // Calculate dynamic stats from globalDailyTotals
+    // ─── حساب الإحصائيات من globalDailyTotals ───────────────────────
     let currentWeekHours = 0;
     let currentWeekMoney = 0;
-    let last7DaysHours = 0;
-    let last7DaysMoney = 0;
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let lastWeekHours    = 0;
+    let lastWeekMoney    = 0;
 
-    const currentBase = getWorkingDayBaseDate();
-    const dayOfWeek = currentBase.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    const sundayBase = new Date(currentBase.getTime());
+    const currentBase   = getWorkingDayBaseDate();
+    const dayOfWeek     = currentBase.getDay(); // 0=Sun
+    const sundayBase    = new Date(currentBase.getTime());
     sundayBase.setDate(currentBase.getDate() - dayOfWeek);
-    const startOfWeekTimestamp = sundayBase.getTime();
+    const startOfCurrentWeek = sundayBase.getTime();
+    const startOfLastWeek    = startOfCurrentWeek - 7 * 24 * 3600 * 1000;
 
-    const curMonth = currentBase.getMonth();
-    const curYear = currentBase.getFullYear();
-    
-    let monthHours = 0;
-    let monthMoney = 0;
-
-    let lastMonth = curMonth - 1;
-    let lastYear = curYear;
-    if (lastMonth < 0) {
-        lastMonth = 11;
-        lastYear -= 1;
-    }
-    let prevMonthHours = 0;
-    let prevMonthMoney = 0;
-
+    const curMonth  = currentBase.getMonth();
+    const curYear   = currentBase.getFullYear();
+    let   monthHours = 0, monthMoney = 0;
+    let   lastMonth  = curMonth - 1, lastYear = curYear;
+    if (lastMonth < 0) { lastMonth = 11; lastYear -= 1; }
+    let   prevMonthHours = 0, prevMonthMoney = 0;
     const monthlySummaries = {};
 
+    // normalise Arabic keys
     const normalizedTotals = {};
     Object.keys(globalDailyTotals).forEach(dayKey => {
         const dt = globalDailyTotals[dayKey];
-        if (dt) {
-            let normKey = dayKey.replace(/،/g, '').replace(/\s+/g, ' ').trim();
-            const easternDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-            for (let i = 0; i < 10; i++) {
-                normKey = normKey.replace(new RegExp(easternDigits[i], 'g'), i);
-            }
-            // Normalize hamza variants
-            normKey = normKey.replace(/الإثنين/g, 'الاثنين');
-            if (!normalizedTotals[normKey]) {
-                normalizedTotals[normKey] = dt;
-            } else {
-                const existing = normalizedTotals[normKey];
-                const existingTime = existing.lastUpdated || 0;
-                const newTime = dt.lastUpdated || 0;
-                if (newTime > existingTime || (newTime === existingTime && (dt.totalMoney || 0) > (existing.totalMoney || 0))) {
-                    normalizedTotals[normKey] = dt;
-                }
+        if (!dt) return;
+        let nk = dayKey.replace(/،/g, '').replace(/\s+/g, ' ').trim();
+        ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'].forEach((c,i) => {
+            nk = nk.replace(new RegExp(c,'g'), i);
+        });
+        nk = nk.replace(/الإثنين/g,'الاثنين');
+        if (!normalizedTotals[nk]) {
+            normalizedTotals[nk] = dt;
+        } else {
+            const ex = normalizedTotals[nk];
+            if ((dt.lastUpdated||0) > (ex.lastUpdated||0) ||
+                ((dt.lastUpdated||0) === (ex.lastUpdated||0) && (dt.totalMoney||0) > (ex.totalMoney||0))) {
+                normalizedTotals[nk] = dt;
             }
         }
     });
 
-    Object.keys(normalizedTotals).forEach(dayKey => {
-        const dt = normalizedTotals[dayKey];
-        if (dt.dayStartTimestamp) {
-            const d = new Date(dt.dayStartTimestamp);
-            
-            // Current week (starting Sunday)
-            if (dt.dayStartTimestamp >= startOfWeekTimestamp) {
-                currentWeekHours += dt.totalHours || 0;
-                currentWeekMoney += dt.totalMoney || 0;
-            }
+    Object.values(normalizedTotals).forEach(dt => {
+        const ts = dt.dayStartTimestamp;
+        if (!ts) return;
+        const d = new Date(ts);
 
-            // Last 7 days (rolling)
-            if (dt.dayStartTimestamp >= oneWeekAgo) {
-                last7DaysHours += dt.totalHours || 0;
-                last7DaysMoney += dt.totalMoney || 0;
-            }
-            
-            // Current month
-            if (d.getMonth() === curMonth && d.getFullYear() === curYear) {
-                monthHours += dt.totalHours || 0;
-                monthMoney += dt.totalMoney || 0;
-            }
-            
-            // Last month
-            if (d.getMonth() === lastMonth && d.getFullYear() === lastYear) {
-                prevMonthHours += dt.totalHours || 0;
-                prevMonthMoney += dt.totalMoney || 0;
-            }
+        if (ts >= startOfCurrentWeek)                          { currentWeekHours += dt.totalHours||0; currentWeekMoney += dt.totalMoney||0; }
+        if (ts >= startOfLastWeek && ts < startOfCurrentWeek) { lastWeekHours    += dt.totalHours||0; lastWeekMoney    += dt.totalMoney||0; }
+        if (d.getMonth()===curMonth  && d.getFullYear()===curYear)   { monthHours     += dt.totalHours||0; monthMoney     += dt.totalMoney||0; }
+        if (d.getMonth()===lastMonth && d.getFullYear()===lastYear)  { prevMonthHours += dt.totalHours||0; prevMonthMoney += dt.totalMoney||0; }
 
-            // Monthly summaries
-            const mKey = `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}`;
-            if (!monthlySummaries[mKey]) {
-                monthlySummaries[mKey] = {
-                    hours: 0,
-                    money: 0,
-                    label: d.toLocaleDateString('ar-EG', { year: 'numeric', month: 'long' })
-                };
-            }
-            monthlySummaries[mKey].hours += dt.totalHours || 0;
-            monthlySummaries[mKey].money += dt.totalMoney || 0;
+        const mKey = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}`;
+        if (!monthlySummaries[mKey]) {
+            monthlySummaries[mKey] = { hours:0, money:0, label: d.toLocaleDateString('ar-EG',{year:'numeric',month:'long'}) };
         }
+        monthlySummaries[mKey].hours += dt.totalHours||0;
+        monthlySummaries[mKey].money += dt.totalMoney||0;
     });
 
-    const sortedMonthKeys = Object.keys(monthlySummaries).sort((a, b) => b.localeCompare(a));
-    let monthlyListHtml = '';
-    if (sortedMonthKeys.length === 0) {
-        monthlyListHtml = '<p class="text-muted" style="text-align:center; padding: 10px 0;">لا توجد شهور مؤرشفة بعد.</p>';
+    // ─── الأرشيف الأسبوعي المحمي (weekly_snapshots) ──────────────────
+    const sortedSnapKeys = Object.keys(globalWeeklySnapshots).sort((a,b) => b.localeCompare(a));
+    let weeklyArchiveHtml = '';
+    if (sortedSnapKeys.length === 0) {
+        weeklyArchiveHtml = '<p class="text-muted" style="text-align:center;padding:10px 0;">لا توجد أسابيع مؤرشفة بعد — سيبدأ الأرشيف تلقائياً مع الأسبوع القادم.</p>';
     } else {
-        sortedMonthKeys.forEach(mKey => {
-            const summary = monthlySummaries[mKey];
-            monthlyListHtml += `
-                <div style="display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px dashed var(--glass-border);">
-                    <strong style="color: var(--accent-neon);">${summary.label}</strong>
-                    <span>${summary.hours.toFixed(1)} س | <span style="color: var(--success); font-weight: bold;">${summary.money} ج.م</span></span>
-                </div>
-            `;
+        sortedSnapKeys.forEach(wk => {
+            const s = globalWeeklySnapshots[wk];
+            weeklyArchiveHtml += `
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px dashed var(--glass-border);gap:10px;">
+                    <span style="color:#a0a0a0;font-size:0.85rem;white-space:nowrap;">
+                        <i class="fas fa-lock" style="color:#ffc400;font-size:0.7rem;margin-left:4px;"></i>${s.label || wk}
+                    </span>
+                    <span style="white-space:nowrap;">
+                        <span style="color:#fff;font-weight:bold;">${(s.totalHours||0).toFixed(1)} س</span>
+                        &nbsp;|&nbsp;
+                        <span style="color:var(--success);font-weight:bold;">${s.totalMoney||0} ج.م</span>
+                    </span>
+                </div>`;
         });
     }
 
+    // ─── الأرشيف الشهري ──────────────────────────────────────────────
+    const sortedMonthKeys = Object.keys(monthlySummaries).sort((a,b) => b.localeCompare(a));
+    let monthlyListHtml = '';
+    if (sortedMonthKeys.length === 0) {
+        monthlyListHtml = '<p class="text-muted" style="text-align:center;padding:10px 0;">لا توجد شهور مؤرشفة بعد.</p>';
+    } else {
+        sortedMonthKeys.forEach(mKey => {
+            const s = monthlySummaries[mKey];
+            monthlyListHtml += `
+                <div style="display:flex;justify-content:space-between;padding:8px 10px;border-bottom:1px dashed var(--glass-border);">
+                    <strong style="color:var(--accent-neon);">${s.label}</strong>
+                    <span>${s.hours.toFixed(1)} س | <span style="color:var(--success);font-weight:bold;">${s.money} ج.م</span></span>
+                </div>`;
+        });
+    }
+
+    // ─── رسم اللوحة ──────────────────────────────────────────────────
     const statsPanel = document.createElement('div');
     statsPanel.className = 'glass-panel';
-    statsPanel.style.marginTop = '30px';
-    statsPanel.style.border = '1px solid rgba(0, 210, 255, 0.2)';
-    statsPanel.style.padding = '20px';
+    statsPanel.style.cssText = 'margin-top:30px;border:1px solid rgba(0,210,255,0.2);padding:20px;';
     statsPanel.innerHTML = `
-        <h3 style="color: var(--accent-neon); margin-bottom: 20px; font-size: 1.3rem; text-align: center;">
+        <h3 style="color:var(--accent-neon);margin-bottom:20px;font-size:1.3rem;text-align:center;">
             <i class="fas fa-chart-line"></i> تقارير الأرباح والساعات
         </h3>
-        
-        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; margin-bottom: 25px;">
-            <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 150px; text-align: center; flex: 1;">
-                <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">الأسبوع الحالي</span>
-                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${currentWeekHours.toFixed(1)} س</span>
-                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${currentWeekMoney} ج.م</span>
-            </div>
 
-            <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 150px; text-align: center; flex: 1;">
-                <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">الأسبوع الماضي</span>
-                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${last7DaysHours.toFixed(1)} س</span>
-                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${last7DaysMoney} ج.م</span>
+        <!-- بطاقات الملخص -->
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-bottom:25px;">
+            <div style="background:rgba(0,210,255,0.07);padding:12px 18px;border-radius:10px;border:1px solid rgba(0,210,255,0.35);min-width:140px;text-align:center;flex:1;">
+                <span style="font-size:0.85rem;color:var(--accent-neon);display:block;margin-bottom:5px;font-weight:bold;">الأسبوع الحالي</span>
+                <span style="font-size:1.3rem;color:#fff;font-weight:bold;">${currentWeekHours.toFixed(1)} س</span>
+                <span style="font-size:1.2rem;color:var(--success);font-weight:bold;display:block;margin-top:3px;">${currentWeekMoney} ج.م</span>
             </div>
-            
-            <div style="background: rgba(0,230,118,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,230,118,0.3); min-width: 150px; text-align: center; flex: 1;">
-                <span style="font-size: 0.9rem; color: var(--success); display: block; margin-bottom: 5px; font-weight: bold;">الشهر الحالي</span>
-                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${monthHours.toFixed(1)} س</span>
-                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${monthMoney} ج.م</span>
+            <div style="background:rgba(0,210,255,0.04);padding:12px 18px;border-radius:10px;border:1px solid rgba(0,210,255,0.2);min-width:140px;text-align:center;flex:1;position:relative;">
+                <span style="font-size:0.85rem;color:var(--accent-neon);display:block;margin-bottom:5px;font-weight:bold;">
+                    الأسبوع الماضي
+                    ${lastWeekHours===0&&lastWeekMoney===0&&sortedSnapKeys.length>0?'<span style="font-size:0.7rem;color:#ffc400;margin-right:4px;">(من الأرشيف)</span>':''}
+                </span>
+                <span style="font-size:1.3rem;color:#fff;font-weight:bold;">
+                    ${(lastWeekHours>0||lastWeekMoney>0) ? lastWeekHours.toFixed(1) : (sortedSnapKeys[0]?(globalWeeklySnapshots[sortedSnapKeys[0]].totalHours||0).toFixed(1):'—')} س
+                </span>
+                <span style="font-size:1.2rem;color:var(--success);font-weight:bold;display:block;margin-top:3px;">
+                    ${(lastWeekHours>0||lastWeekMoney>0) ? lastWeekMoney : (sortedSnapKeys[0]?(globalWeeklySnapshots[sortedSnapKeys[0]].totalMoney||0):'—')} ج.م
+                </span>
             </div>
-
-            <div style="background: rgba(255,196,0,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(255,196,0,0.3); min-width: 150px; text-align: center; flex: 1;">
-                <span style="font-size: 0.9rem; color: #ffc400; display: block; margin-bottom: 5px; font-weight: bold;">الشهر الماضي</span>
-                <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${prevMonthHours.toFixed(1)} س</span>
-                <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${prevMonthMoney} ج.م</span>
+            <div style="background:rgba(0,230,118,0.05);padding:12px 18px;border-radius:10px;border:1px solid rgba(0,230,118,0.3);min-width:140px;text-align:center;flex:1;">
+                <span style="font-size:0.85rem;color:var(--success);display:block;margin-bottom:5px;font-weight:bold;">الشهر الحالي</span>
+                <span style="font-size:1.3rem;color:#fff;font-weight:bold;">${monthHours.toFixed(1)} س</span>
+                <span style="font-size:1.2rem;color:var(--success);font-weight:bold;display:block;margin-top:3px;">${monthMoney} ج.م</span>
+            </div>
+            <div style="background:rgba(255,196,0,0.05);padding:12px 18px;border-radius:10px;border:1px solid rgba(255,196,0,0.3);min-width:140px;text-align:center;flex:1;">
+                <span style="font-size:0.85rem;color:#ffc400;display:block;margin-bottom:5px;font-weight:bold;">الشهر الماضي</span>
+                <span style="font-size:1.3rem;color:#fff;font-weight:bold;">${prevMonthHours.toFixed(1)} س</span>
+                <span style="font-size:1.2rem;color:var(--success);font-weight:bold;display:block;margin-top:3px;">${prevMonthMoney} ج.م</span>
             </div>
         </div>
 
-        <h4 style="color: #fff; margin-bottom: 12px; font-size: 1.05rem; border-bottom: 1px solid var(--glass-border); padding-bottom: 6px;">
+        <!-- أرشيف أسبوعي محمي -->
+        <h4 style="color:#fff;margin-bottom:10px;font-size:1rem;border-bottom:1px solid var(--glass-border);padding-bottom:6px;">
+            <i class="fas fa-shield-alt" style="color:#ffc400;"></i> الأرشيف الأسبوعي المحمي
+            <span style="font-size:0.75rem;color:#a0a0a0;margin-right:8px;">— لا يتأثر بحذف الحجوزات</span>
+        </h4>
+        <div style="max-height:160px;overflow-y:auto;font-size:0.92rem;margin-bottom:20px;">
+            ${weeklyArchiveHtml}
+        </div>
+
+        <!-- أرشيف شهري -->
+        <h4 style="color:#fff;margin-bottom:10px;font-size:1rem;border-bottom:1px solid var(--glass-border);padding-bottom:6px;">
             <i class="fas fa-history"></i> الأرشيف الشهري
         </h4>
-        <div style="max-height: 180px; overflow-y: auto; font-size: 0.95rem;">
+        <div style="max-height:160px;overflow-y:auto;font-size:0.92rem;">
             ${monthlyListHtml}
         </div>
     `;
     container.appendChild(statsPanel);
 }
+
 window.renderAdminBookings = renderAdminBookings;
 
 function updateConsoleField(index, fields) {
@@ -1416,6 +1501,36 @@ window.emergencyResumeAll = function() {
     }
 };
 
+// ✅ فتح / إغلاق قبول الحجوزات
+window.toggleBookingsAcceptance = function() {
+    if (!db) return;
+    const newState = !globalBookingsEnabled;
+    const msg = newState
+        ? 'هل تريد فتح الحجوزات للعملاء الآن؟'
+        : 'هل تريد إيقاف استقبال الحجوزات مؤقتاً؟';
+    if (!confirm(msg)) return;
+    update(ref(db, 'settings'), { bookingsEnabled: newState })
+        .then(() => {
+            alert(newState ? '✅ تم فتح الحجوزات بنجاح!' : '🔒 تم إيقاف الحجوزات مؤقتاً.');
+        })
+        .catch(err => alert('خطأ: ' + err.message));
+};
+
+// تحديث مظهر الزرار في لوحة الإدارة
+window.updateBookingToggleButton = function(enabled) {
+    const btn   = document.getElementById('toggle-bookings-btn');
+    const label = document.getElementById('toggle-bookings-label');
+    if (!btn || !label) return;
+    if (enabled) {
+        label.textContent = '🔒 إيقاف قبول الحجوزات';
+        btn.style.background = '#4a148c';
+        btn.style.border = '1px solid #ce93d8';
+    } else {
+        label.textContent = '✅ فتح قبول الحجوزات';
+        btn.style.background = '#1b5e20';
+        btn.style.border = '1px solid #00e676';
+    }
+};
 
 function checkBookingConflict(booking) {
     const start = booking.actualStartTime || booking.startTime;
@@ -1861,6 +1976,66 @@ function cleanupOldBookings() {
     });
 }
 
+// ✅ تهيئة كاملة — تُستدعى من لوحة الإدارة لبداية شهر جديد
+window.fullResetForNewMonth = function() {
+    // تأكيد مزدوج للحماية
+    const first = confirm(
+        '⚠️ تحذير: سيتم حذف جميع الحجوزات والإحصائيات القديمة نهائياً.\n\n' +
+        'هذا الإجراء لا يمكن التراجع عنه!\n\n' +
+        'هل أنت متأكد تماماً؟'
+    );
+    if (!first) return;
+
+    const second = confirm(
+        '✋ تأكيد أخير:\n\n' +
+        'سيتم حذف:\n' +
+        '• كل الحجوزات (bookings)\n' +
+        '• بيانات الإحصائيات اليومية (daily_totals)\n' +
+        '• الأرشيف الأسبوعي (weekly_snapshots)\n' +
+        '• إعادة ضبط حالة الأجهزة\n\n' +
+        'اضغط موافق للتنفيذ.'
+    );
+    if (!second) return;
+
+    if (!db) { alert('خطأ: لم يتم الاتصال بقاعدة البيانات.'); return; }
+
+    let done = 0;
+    const total = 4;
+    const finish = () => {
+        done++;
+        if (done === total) {
+            alert('✅ تمت التهيئة الكاملة بنجاح!\n\nالموقع جاهز لاستقبال حجوزات شهر يوليو 🎉');
+        }
+    };
+
+    // 1) حذف كل الحجوزات
+    set(ref(db, 'bookings'), null)
+        .then(finish)
+        .catch(err => { console.error('Failed to clear bookings:', err); finish(); });
+
+    // 2) حذف الإحصائيات اليومية
+    set(ref(db, 'daily_totals'), null)
+        .then(finish)
+        .catch(err => { console.error('Failed to clear daily_totals:', err); finish(); });
+
+    // 3) حذف الأرشيف الأسبوعي التجريبي
+    set(ref(db, 'weekly_snapshots'), null)
+        .then(finish)
+        .catch(err => { console.error('Failed to clear weekly_snapshots:', err); finish(); });
+
+    // 4) إعادة ضبط حالة الأجهزة (إزالة العدادات)
+    const resetPromises = globalConsoles.map((c, index) => {
+        if (!c) return Promise.resolve();
+        return set(ref(db, 'consoles/' + index), {
+            ...c,
+            status: 'available',
+            activeTimer: null
+        }).catch(err => console.warn(`Failed to reset console ${index}:`, err));
+    });
+    Promise.all(resetPromises).then(finish).catch(finish);
+};
+
+
 // Initialize everything once Firebase is ready
 window.initApp = function(firebaseServices) {
     db = firebaseServices.db;
@@ -1887,6 +2062,18 @@ window.initApp = function(firebaseServices) {
         const data = snap.val();
         if (!data || data.length !== 5) {
             set(consolesRef, initialConsoles);
+        }
+    });
+
+    // ✅ تأكد من وجود إعداد الحجوزات أو افتحه تلقائياً مع بداية شهر يوليو 2026
+    get(ref(db, 'settings/bookingsEnabled')).then(snap => {
+        const isJulyOrLater = Date.now() >= new Date('2026-07-01T00:00:00').getTime();
+        if (isJulyOrLater) {
+            // إذا وصلنا لشهر 7 أو بعده، افتح الحجوزات تلقائياً
+            update(ref(db, 'settings'), { bookingsEnabled: true });
+        } else if (!snap.exists()) {
+            // قبل شهر 7 وإذا لم يكن الإعداد موجوداً، اجعله مغلقاً افتراضياً
+            update(ref(db, 'settings'), { bookingsEnabled: false });
         }
     });
 
@@ -1954,6 +2141,17 @@ window.initApp = function(firebaseServices) {
         } else {
             globalDailyTotals = {};
         }
+        // ✅ عند كل تحديث: تحقق إن كنا في أسبوع جديد وأرشف الأسبوع الماضي
+        if (window._isAdmin) {
+            maybeArchiveLastWeekSnapshot();
+            renderAdminBookings();
+        }
+    });
+
+    // Realtime weekly snapshots (أرشيف أسبوعي محمي لا يُحذف)
+    const weeklySnapshotsRef = ref(db, 'weekly_snapshots');
+    onValue(weeklySnapshotsRef, snap => {
+        globalWeeklySnapshots = snap.exists() ? snap.val() : {};
         if (window._isAdmin) {
             renderAdminBookings();
         }
@@ -1962,12 +2160,44 @@ window.initApp = function(firebaseServices) {
     // Realtime settings
     const settingsRef = ref(db, 'settings');
     onValue(settingsRef, snap => {
-        if (snap.exists()) {
-            globalEmergencyMode = !!snap.val().emergencyMode;
-            globalEmergencyStartTime = snap.val().emergencyStartTime || 0;
+        const val = snap.exists() ? snap.val() : {};
+        globalEmergencyMode      = !!val.emergencyMode;
+        globalEmergencyStartTime = val.emergencyStartTime || 0;
+        globalBookingsEnabled    = val.bookingsEnabled !== false; // افتراضي: مفتوح
+
+        // عرض/إخفاء overlay انقطاع الكهرباء
+        const overlay = document.getElementById('power-outage-overlay');
+        if (overlay) {
+            overlay.classList.toggle('active', globalEmergencyMode);
+        }
+
+        // تحديث مظهر زرار التحكم في الحجوزات (في لوحة الإدارة)
+        window.updateBookingToggleButton(globalBookingsEnabled);
+
+        // عرض/إخفاء banner إغلاق الحجوزات
+        let bookingBanner = document.getElementById('booking-closed-banner');
+        const bookingSection = document.getElementById('booking');
+        if (!globalBookingsEnabled && bookingSection) {
+            if (!bookingBanner) {
+                bookingBanner = document.createElement('div');
+                bookingBanner.id = 'booking-closed-banner';
+                bookingBanner.style.cssText = 'background:rgba(255,196,0,0.08);border:1px solid rgba(255,196,0,0.4);border-radius:12px;padding:20px 24px;text-align:center;margin-bottom:20px;';
+                bookingBanner.innerHTML = `
+                    <i class="fas fa-calendar-times" style="font-size:2rem;color:#ffc400;margin-bottom:10px;display:block;"></i>
+                    <strong style="font-size:1.1rem;color:#ffc400;">الحجز متوقف مؤقتاً</strong>
+                    <p style="color:#a0a0a0;margin:8px 0 0;font-size:0.95rem;">
+                        سيتم فتح الحجوزات بداية من <strong style="color:#fff;">1 يوليو 2026</strong> إن شاء الله.<br>
+                        نعتذر عن الإزعاج ونرحب بكم قريباً 🙏
+                    </p>`;
+                bookingSection.insertBefore(bookingBanner, bookingSection.firstChild);
+            }
+            // إخفاء فورم الحجز
+            const form = document.getElementById('whatsapp-booking-form');
+            if (form) form.style.display = 'none';
         } else {
-            globalEmergencyMode = false;
-            globalEmergencyStartTime = 0;
+            if (bookingBanner) bookingBanner.remove();
+            const form = document.getElementById('whatsapp-booking-form');
+            if (form) form.style.display = '';
         }
     });
 
@@ -2020,7 +2250,12 @@ window.initApp = function(firebaseServices) {
 
         bookingForm.addEventListener('submit', async e => {
             e.preventDefault();
-            
+
+            if (!globalBookingsEnabled) {
+                alert('عفواً، الحجز متوقف مؤقتاً. سيتم فتحه بداية من 1 يوليو 2026 إن شاء الله.');
+                return;
+            }
+
             if (globalEmergencyMode) {
                 alert("عفواً، لا يمكن الحجز حالياً بسبب انقطاع التيار الكهربائي (حالة الطوارئ).");
                 return;

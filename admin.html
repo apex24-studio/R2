@@ -108,6 +108,9 @@
                 <button class="btn btn-success" onclick="window.emergencyResumeAll()" style="background: #1b5e20; border: 1px solid #00e676; display: flex; align-items: center; gap: 8px; color: #fff; font-weight: bold; cursor: pointer; padding: 10px 15px; border-radius: 6px;">
                     <i class="fas fa-play"></i> استئناف الطوارئ للكل
                 </button>
+                <button id="toggle-bookings-btn" onclick="window.toggleBookingsAcceptance()" style="background: #4a148c; border: 1px solid #ce93d8; display: flex; align-items: center; gap: 8px; color: #fff; font-weight: bold; cursor: pointer; padding: 10px 15px; border-radius: 6px;">
+                    <i class="fas fa-calendar-check"></i> <span id="toggle-bookings-label">تحميل...</span>
+                </button>
             </div>
             <div id="admin-devices-list">
                 <!-- Injected via JS -->
@@ -116,7 +119,19 @@
 
         <div id="bookings-tab" style="display: none; margin-top: 20px;">
             <h2>إدارة الحجوزات المسبقة</h2>
-            <p class="text-muted" style="margin-bottom: 30px;">قم بتأكيد الدفع للحجوزات لتفعيلها في وقتها.</p>
+            <p class="text-muted" style="margin-bottom: 20px;">قم بتأكيد الدفع للحجوزات لتفعيلها في وقتها.</p>
+
+            <!-- زرار التهيئة الكاملة -->
+            <div style="background: rgba(255,23,68,0.06); border: 1px solid rgba(255,23,68,0.3); border-radius: 10px; padding: 16px 20px; margin-bottom: 25px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                <div>
+                    <strong style="color: #ff5252; font-size: 1rem;"><i class="fas fa-trash-alt"></i> تهيئة كاملة — بداية شهر يوليو</strong>
+                    <p style="color: #a0a0a0; font-size: 0.82rem; margin: 4px 0 0;">يحذف جميع الحجوزات التجريبية وبيانات الإحصائيات القديمة ويُعيد ضبط الأجهزة. لا يمكن التراجع!</p>
+                </div>
+                <button onclick="window.fullResetForNewMonth()" style="background: #b71c1c; border: 1px solid #ff1744; color: #fff; font-weight: bold; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; white-space: nowrap;">
+                    <i class="fas fa-exclamation-triangle"></i> تهيئة الآن
+                </button>
+            </div>
+
             <div id="admin-bookings-list">
                 <!-- Injected via JS -->
             </div>
