@@ -11,6 +11,7 @@ let globalConsoles = [];
 let globalBookings = [];
 let globalDailyTotals = {};
 let globalEmergencyMode = false;
+let globalEmergencyStartTime = 0;
 
 const PRICES = { PS4: 40, PS5: 60 };
 const PAYMENT_NUMBERS = {
@@ -809,6 +810,7 @@ function renderAdminBookings() {
                         </div>` : ''}
                         
                         <div class="booking-actions">
+                            ${b.delayedByMs ? `<button class="btn btn-small btn-warning" onclick="window.notifyDelay('${b.id}')" style="background: #ff9800; border: none; color: #fff; margin-left: 5px;"><i class="fab fa-whatsapp"></i> إشعار التأخير</button>` : ''}
                             ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
                             ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'cancelled_with_fee' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
                         </div>
@@ -1203,7 +1205,8 @@ window.pauseDeviceTimer = function(index) {
     
     const now = Date.now();
     let updates = {
-        isPaused: true
+        isPaused: true,
+        pausedAt: now
     };
     
     if (c.activeTimer.isOpen) {
@@ -1239,15 +1242,65 @@ window.resumeDeviceTimer = function(index) {
         }
     }
     
+    if (db && c.activeTimer.pausedAt) {
+        const lastOccupied = activeTimerCopy.isOpen ? now : (activeTimerCopy.endTime || now);
+        window.shiftOverlappingBookings(c.name, lastOccupied);
+    }
+
     // Remove pause properties
     const activeTimerCopy = { ...c.activeTimer, ...updates };
     delete activeTimerCopy.isPaused;
     delete activeTimerCopy.pausedTimeLeftMs;
     delete activeTimerCopy.pausedElapsedMs;
+    delete activeTimerCopy.pausedAt;
     
     updateConsoleField(index, {
         activeTimer: activeTimerCopy
     });
+};
+
+window.shiftOverlappingBookings = function(deviceName, initialOccupiedTimeMs) {
+    if (!db || !globalBookings || !deviceName) return 0;
+    const currentWorkingDay = getWorkingDayBaseDateFor(Date.now()).getTime();
+    
+    // Get all approved bookings for this device today, sorted by start time
+    const deviceBookings = globalBookings.filter(b => 
+        b.status === 'approved' && 
+        b.specificDevice === deviceName &&
+        getWorkingDayBaseDateFor(b.startTime).getTime() === currentWorkingDay
+    ).sort((a, b) => a.startTime - b.startTime);
+
+    let lastOccupiedTime = initialOccupiedTimeMs;
+    let shiftedCount = 0;
+    
+    deviceBookings.forEach(b => {
+        if (b.startTime < lastOccupiedTime) {
+            const shiftMs = lastOccupiedTime - b.startTime;
+            const newStartTime = lastOccupiedTime;
+            update(ref(db, `bookings/${b.id}`), { 
+                startTime: newStartTime, 
+                delayedByMs: (b.delayedByMs || 0) + shiftMs 
+            });
+            shiftedCount++;
+            const bDur = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
+            lastOccupiedTime = newStartTime + (bDur * 3600 * 1000);
+        } else {
+            const bDur = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
+            lastOccupiedTime = b.startTime + (bDur * 3600 * 1000);
+        }
+    });
+    return shiftedCount;
+};
+
+window.notifyDelay = function(id) {
+    const b = globalBookings.find(x => x.id === id);
+    if (!b) return;
+    const newTime = new Date(b.startTime).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'});
+    let phone = b.phone || '';
+    if (phone.startsWith('0')) phone = '20' + phone.substring(1);
+    const msg = `نعتذر لك، بسبب انقطاع التيار الكهربائي الطارئ، تم ترحيل موعد حجزك ليكون في تمام الساعة ${newTime}. نأسف للإزعاج وننتظرك!`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+    if (db) update(ref(db, `bookings/${id}`), { delayedByMs: null });
 };
 
 window.emergencyPauseAll = function() {
@@ -1258,7 +1311,7 @@ window.emergencyPauseAll = function() {
             pausedCount++;
         }
     });
-    if (db) update(ref(db, 'settings'), { emergencyMode: true });
+    if (db) update(ref(db, 'settings'), { emergencyMode: true, emergencyStartTime: Date.now() });
     if (pausedCount > 0) {
         alert(`تم إيقاف العدادات مؤقتاً لعدد ${pausedCount} جهاز بنجاح!`);
     } else {
@@ -1274,7 +1327,42 @@ window.emergencyResumeAll = function() {
             resumedCount++;
         }
     });
-    if (db) update(ref(db, 'settings'), { emergencyMode: false });
+    
+    if (db) {
+        if (globalEmergencyStartTime > 0) {
+            let totalShiftedCount = 0;
+            
+            // Shift overlapping bookings per device
+            globalConsoles.forEach(c => {
+                if (!c) return;
+                let lastOccupied = Date.now();
+                if (c.activeTimer && !c.activeTimer.isOpen && c.activeTimer.endTime) {
+                    lastOccupied = c.activeTimer.endTime;
+                }
+                totalShiftedCount += window.shiftOverlappingBookings(c.name, lastOccupied);
+            });
+            
+            // Shift generic bookings ('any') if they overlap with the current time
+            const currentWorkingDay = getWorkingDayBaseDateFor(Date.now()).getTime();
+            globalBookings.forEach(b => {
+                if (b.status === 'approved' && b.specificDevice === 'any') {
+                    if (getWorkingDayBaseDateFor(b.startTime).getTime() === currentWorkingDay) {
+                        if (b.startTime < Date.now()) {
+                            const shiftMs = Date.now() - b.startTime;
+                            update(ref(db, `bookings/${b.id}`), { 
+                                startTime: Date.now(), 
+                                delayedByMs: (b.delayedByMs || 0) + shiftMs 
+                            });
+                            totalShiftedCount++;
+                        }
+                    }
+                }
+            });
+            console.log(`Shifted ${totalShiftedCount} future bookings due to emergency resume.`);
+        }
+        update(ref(db, 'settings'), { emergencyMode: false, emergencyStartTime: 0 });
+    }
+
     if (resumedCount > 0) {
         alert(`تم استئناف العدادات لعدد ${resumedCount} جهاز بنجاح!`);
     } else {
@@ -1799,8 +1887,10 @@ window.initApp = function(firebaseServices) {
     onValue(settingsRef, snap => {
         if (snap.exists()) {
             globalEmergencyMode = !!snap.val().emergencyMode;
+            globalEmergencyStartTime = snap.val().emergencyStartTime || 0;
         } else {
             globalEmergencyMode = false;
+            globalEmergencyStartTime = 0;
         }
     });
 
