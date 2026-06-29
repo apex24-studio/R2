@@ -35,6 +35,14 @@ function formatTimeLeft(endTime) {
     return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
 }
 
+function formatDuration(diff) {
+    if (diff <= 0) return "00:00:00";
+    const h = Math.floor(diff / (1000 * 60 * 60));
+    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    const s = Math.floor((diff % (1000 * 60)) / 1000);
+    return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
 function getDayKey(timestamp) {
     if (!timestamp) return "حجوزات غير محددة التاريخ";
     const date = new Date(timestamp);
@@ -86,7 +94,7 @@ function saveDailyTotalsFromBookings(bookings) {
         }
         
         daysToUpdate[dayKey].count++;
-        if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow') {
+        if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow' || b.status === 'cancelled_with_fee') {
             const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
             daysToUpdate[dayKey].totalHours += dur;
             daysToUpdate[dayKey].totalMoney += (b.depositAmount || 0);
@@ -545,7 +553,12 @@ function renderConsoles() {
 
         let timerDisplay = '';
         if (c.activeTimer) {
-            if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
+            if (c.activeTimer.isPaused) {
+                const displayVal = c.activeTimer.isOpen 
+                    ? formatDuration(c.activeTimer.pausedElapsedMs)
+                    : formatDuration(c.activeTimer.pausedTimeLeftMs);
+                timerDisplay = `<div class="public-timer" data-ispaused="true" style="margin-top:10px;font-weight:bold;color:#ffc400;font-family:'Orbitron',sans-serif;">${displayVal} (موقوف)</div>`;
+            } else if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
                 timerDisplay = `<div class="public-timer" data-isopen="true" data-starttime="${c.activeTimer.startTime}" style="margin-top:10px;font-weight:bold;color:var(--success);font-family:'Orbitron',sans-serif;">00:00:00</div>`;
             } else if (c.activeTimer.endTime > Date.now()) {
                 timerDisplay = `<div class="public-timer" data-endtime="${c.activeTimer.endTime}" style="margin-top:10px;font-weight:bold;color:var(--accent-neon);font-family:'Orbitron',sans-serif;">--:--:--</div>`;
@@ -592,7 +605,12 @@ function renderAdminConsoles() {
         
         let timerDisplay = '';
         if (c.activeTimer) {
-            if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
+            if (c.activeTimer.isPaused) {
+                const displayVal = c.activeTimer.isOpen 
+                    ? formatDuration(c.activeTimer.pausedElapsedMs)
+                    : formatDuration(c.activeTimer.pausedTimeLeftMs);
+                timerDisplay = `<div class="timer-display" data-ispaused="true" style="color:#ffc400;">${displayVal} (موقوف)</div>`;
+            } else if (c.activeTimer.isOpen && !c.activeTimer.isGracePeriod) {
                 timerDisplay = `<div class="timer-display" data-isopen="true" data-starttime="${c.activeTimer.startTime}">00:00:00</div>`;
             } else if (c.activeTimer.endTime > Date.now()) {
                 timerDisplay = `<div class="timer-display" data-endtime="${c.activeTimer.endTime}">--:--:--</div>`;
@@ -620,6 +638,11 @@ function renderAdminConsoles() {
                     <input type="number" id="hours-${index}" placeholder="ساعة" min="0" value="0">
                     <input type="number" id="mins-${index}" placeholder="دقيقة" min="0" max="59" value="0">
                     <button class="btn btn-small btn-primary" onclick="window.startTimer(${index})">بدء العداد</button>
+                    ${c.activeTimer ? (
+                        c.activeTimer.isPaused 
+                            ? `<button class="btn btn-small btn-warning" onclick="window.resumeDeviceTimer(${index})" style="background: #1b5e20; border-color: #00e676;">استئناف</button>`
+                            : `<button class="btn btn-small btn-warning" onclick="window.pauseDeviceTimer(${index})" style="background: #e65100; border-color: #ff6d00;">إيقاف مؤقت</button>`
+                    ) : ''}
                     <button class="btn btn-small btn-danger" onclick="window.stopTimer(${index})">إيقاف</button>
                 </div>
             </div>
@@ -661,6 +684,7 @@ function renderAdminBookings() {
         'approved': '<span style="color:var(--success)">مؤكد (تم الدفع)</span>',
         'cancelled': '<span style="color:var(--danger)">ملغي</span>',
         'cancelled_noshow': '<span style="color:var(--danger)">ملغي (لم يحضر)</span>',
+        'cancelled_with_fee': '<span style="color:var(--danger)">ملغى (غير مسترد)</span>',
         'active_in_store': '<span style="color:var(--success)">نشط الآن</span>',
         'completed': '<span style="color:var(--text-muted)">مكتمل</span>'
     };
@@ -700,7 +724,7 @@ function renderAdminBookings() {
 
         if (bookingsInDay) {
             bookingsInDay.forEach(b => {
-                if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow') {
+                if (b.status === 'approved' || b.status === 'active_in_store' || b.status === 'completed' || b.status === 'cancelled_noshow' || b.status === 'cancelled_with_fee') {
                     const dur = b.duration === 'open' ? 0 : parseFloat(b.duration) || 0;
                     dayTotalHours += dur;
                     dayTotalMoney += (b.depositAmount || 0);
@@ -785,7 +809,7 @@ function renderAdminBookings() {
                         
                         <div class="booking-actions">
                             ${b.status === 'pending_payment' ? `<button class="btn btn-small btn-success" onclick="window.approveBooking('${b.id}')">تأكيد الدفع</button>` : ''}
-                            ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
+                            ${b.status !== 'cancelled' && b.status !== 'cancelled_noshow' && b.status !== 'cancelled_with_fee' && b.status !== 'completed' ? `<button class="btn btn-small btn-danger" onclick="window.cancelBooking('${b.id}')">إلغاء الحجز</button>` : ''}
                         </div>
                     `;
                     content.appendChild(card);
@@ -929,7 +953,7 @@ function renderAdminBookings() {
             </div>
 
             <div style="background: rgba(0,210,255,0.05); padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(0,210,255,0.3); min-width: 150px; text-align: center; flex: 1;">
-                <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">آخر 7 أيام</span>
+                <span style="font-size: 0.9rem; color: var(--accent-neon); display: block; margin-bottom: 5px; font-weight: bold;">الأسبوع الماضي</span>
                 <span style="font-size: 1.3rem; color: #fff; font-weight: bold;">${last7DaysHours.toFixed(1)} س</span>
                 <span style="font-size: 1.3rem; color: var(--success); font-weight: bold; display: block; margin-top: 3px;">${last7DaysMoney} ج.م</span>
             </div>
@@ -1172,6 +1196,90 @@ window.stopTimer = function(index) {
     updateConsoleField(index, { status: 'available', activeTimer: null });
 };
 
+window.pauseDeviceTimer = function(index) {
+    const c = globalConsoles[index];
+    if (!c || !c.activeTimer || c.activeTimer.isPaused) return;
+    
+    const now = Date.now();
+    let updates = {
+        isPaused: true
+    };
+    
+    if (c.activeTimer.isOpen) {
+        updates.pausedElapsedMs = now - c.activeTimer.startTime;
+    } else {
+        updates.pausedTimeLeftMs = c.activeTimer.endTime - now;
+    }
+    
+    updateConsoleField(index, {
+        activeTimer: {
+            ...c.activeTimer,
+            ...updates
+        }
+    });
+};
+
+window.resumeDeviceTimer = function(index) {
+    const c = globalConsoles[index];
+    if (!c || !c.activeTimer || !c.activeTimer.isPaused) return;
+    
+    const now = Date.now();
+    let updates = {};
+    
+    if (c.activeTimer.isOpen) {
+        const pausedElapsedMs = c.activeTimer.pausedElapsedMs || 0;
+        updates.startTime = now - pausedElapsedMs;
+    } else {
+        const pausedTimeLeftMs = c.activeTimer.pausedTimeLeftMs || 0;
+        updates.endTime = now + pausedTimeLeftMs;
+        // Keep visual duration correct if it was set
+        if (c.activeTimer.startTime && c.activeTimer.durationMinutes) {
+            updates.startTime = now - (c.activeTimer.durationMinutes * 60000 - pausedTimeLeftMs);
+        }
+    }
+    
+    // Remove pause properties
+    const activeTimerCopy = { ...c.activeTimer, ...updates };
+    delete activeTimerCopy.isPaused;
+    delete activeTimerCopy.pausedTimeLeftMs;
+    delete activeTimerCopy.pausedElapsedMs;
+    
+    updateConsoleField(index, {
+        activeTimer: activeTimerCopy
+    });
+};
+
+window.emergencyPauseAll = function() {
+    let pausedCount = 0;
+    globalConsoles.forEach((c, index) => {
+        if (c && c.activeTimer && !c.activeTimer.isPaused) {
+            window.pauseDeviceTimer(index);
+            pausedCount++;
+        }
+    });
+    if (pausedCount > 0) {
+        alert(`تم إيقاف العدادات مؤقتاً لعدد ${pausedCount} جهاز بنجاح!`);
+    } else {
+        alert("لا توجد أجهزة نشطة حالياً ليتم إيقافها.");
+    }
+};
+
+window.emergencyResumeAll = function() {
+    let resumedCount = 0;
+    globalConsoles.forEach((c, index) => {
+        if (c && c.activeTimer && c.activeTimer.isPaused) {
+            window.resumeDeviceTimer(index);
+            resumedCount++;
+        }
+    });
+    if (resumedCount > 0) {
+        alert(`تم استئناف العدادات لعدد ${resumedCount} جهاز بنجاح!`);
+    } else {
+        alert("لا توجد أجهزة موقوفة حالياً ليتم استئنافها.");
+    }
+};
+
+
 function checkBookingConflict(booking) {
     const start = booking.actualStartTime || booking.startTime;
     const bDurationNum = booking.duration === 'open' ? 24 : booking.duration;
@@ -1251,8 +1359,27 @@ window.approveBooking = function(id) {
 };
 
 window.cancelBooking = function(id) {
-    if (confirm("هل أنت متأكد من إلغاء هذا الحجز وحذفه نهائياً؟")) {
-        set(ref(db, `bookings/${id}`), null);
+    const b = globalBookings.find(x => x.id === id);
+    if (!b) return;
+    
+    const keepDeposit = confirm("هل تريد الاحتفاظ بمبلغ الحجز (حجز غير مسترد) وتغيير حالته؟ \n(اختر 'موافق/OK' للاحتفاظ بالمبلغ، أو 'إلغاء/Cancel' لحذفه بالكامل)");
+    
+    if (keepDeposit) {
+        update(ref(db, `bookings/${id}`), { status: 'cancelled_with_fee' });
+        globalConsoles.forEach((c, idx) => {
+            if (c.activeTimer && c.activeTimer.bookingId === id) {
+                updateConsoleField(idx, { status: 'available', activeTimer: null });
+            }
+        });
+    } else {
+        if (confirm("سيتم حذف الحجز نهائياً. تأكيد؟")) {
+            set(ref(db, `bookings/${id}`), null);
+            globalConsoles.forEach((c, idx) => {
+                if (c.activeTimer && c.activeTimer.bookingId === id) {
+                    updateConsoleField(idx, { status: 'available', activeTimer: null });
+                }
+            });
+        }
     }
 };
 
@@ -1354,6 +1481,7 @@ window.switchTab = function(tab) {
 setInterval(() => {
     const now = Date.now();
     document.querySelectorAll('.timer-display, .public-timer').forEach(el => {
+        if (el.getAttribute('data-ispaused') === 'true') return;
         const endTime = parseInt(el.getAttribute('data-endtime'));
         const isOpen = el.getAttribute('data-isopen') === 'true';
         const startTime = parseInt(el.getAttribute('data-starttime'));
@@ -1535,6 +1663,36 @@ function compressImage(file, maxWidth = 800, maxHeight = 800, quality = 0.7) {
     });
 }
 
+function cleanupOldBookings() {
+    if (!window._isAdmin || !globalBookings || globalBookings.length === 0) return;
+    
+    const currentBase = getWorkingDayBaseDate();
+    const dayOfWeek = currentBase.getDay();
+    const sundayBase = new Date(currentBase.getTime());
+    sundayBase.setDate(currentBase.getDate() - dayOfWeek);
+    const keepThreshold = sundayBase.getTime();
+    
+    globalBookings.forEach(b => {
+        // Delete corrupt bookings directly
+        if (!b.startTime || !b.deviceType) {
+            set(ref(db, `bookings/${b.id}`), null).catch(err => {
+                console.warn("Failed to delete corrupt booking:", err);
+            });
+            return;
+        }
+        
+        const bookingTime = b.startTime || b.createdAt;
+        if (bookingTime) {
+            const bBaseTime = getWorkingDayBaseDateFor(bookingTime).getTime();
+            if (bBaseTime < keepThreshold) {
+                set(ref(db, `bookings/${b.id}`), null).catch(err => {
+                    console.warn("Failed to auto-delete old booking:", err);
+                });
+            }
+        }
+    });
+}
+
 // Initialize everything once Firebase is ready
 window.initApp = function(firebaseServices) {
     db = firebaseServices.db;
@@ -1576,6 +1734,7 @@ window.initApp = function(firebaseServices) {
             if (logoutBtn) logoutBtn.style.display = 'inline-block';
             renderAdminConsoles();
             renderAdminBookings();
+            cleanupOldBookings();
         } else {
             window._isAdmin = false;
             if (loginSection) loginSection.style.display = 'flex';
@@ -1597,30 +1756,17 @@ window.initApp = function(firebaseServices) {
     onValue(bookingsRef, snap => {
         if (snap.exists()) {
             const data = snap.val();
-            globalBookings = Object.keys(data).map(k => ({ id: k, ...data[k] }));
+            globalBookings = Object.keys(data)
+                .map(k => ({ id: k, ...data[k] }))
+                .filter(b => b.startTime && b.deviceType);
 
             // Save daily totals for all days represented in active bookings
             saveDailyTotalsFromBookings(globalBookings);
 
-            // Auto-cleanup bookings: keep only the current week starting from Sunday.
-            // Any bookings from previous weeks (before Sunday 3:00 AM working day) are deleted.
-            const currentBase = getWorkingDayBaseDate();
-            const dayOfWeek = currentBase.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-            const sundayBase = new Date(currentBase.getTime());
-            sundayBase.setDate(currentBase.getDate() - dayOfWeek);
-            const keepThreshold = sundayBase.getTime();
-            
-            globalBookings.forEach(b => {
-                const bookingTime = b.startTime || b.createdAt;
-                if (bookingTime) {
-                    const bBaseTime = getWorkingDayBaseDateFor(bookingTime).getTime();
-                    if (bBaseTime < keepThreshold) {
-                        set(ref(db, `bookings/${b.id}`), null).catch(err => {
-                            console.warn("Failed to auto-delete old booking:", err);
-                        });
-                    }
-                }
-            });
+            // Auto-cleanup bookings if admin
+            if (window._isAdmin) {
+                cleanupOldBookings();
+            }
         } else {
             globalBookings = [];
         }
@@ -1741,6 +1887,21 @@ window.initApp = function(firebaseServices) {
             if (paymentMethod === 'vodafone' && !receiptFile) {
                 alert('الرجاء رفع صورة تحويل فودافون كاش');
                 return;
+            }
+
+            if (duration !== 'open') {
+                const startD = new Date(startTime);
+                const closing = new Date(startD.getTime());
+                if (startD.getHours() >= 3) {
+                    closing.setDate(closing.getDate() + 1);
+                }
+                closing.setHours(3, 0, 0, 0);
+                const storeClosingTime = closing.getTime();
+                
+                if (startTime + duration * 3600 * 1000 > storeClosingTime) {
+                    alert('لا يمكنك الحجز لعدد ساعات يتجاوز موعد إغلاق المحل (3:00 صباحاً).');
+                    return;
+                }
             }
 
             if (submitBtn) { submitBtn.disabled = true; submitBtn.innerText = 'جارٍ معالجة الصورة...'; }
