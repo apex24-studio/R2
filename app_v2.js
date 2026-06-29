@@ -1223,7 +1223,7 @@ window.pauseDeviceTimer = function(index) {
     });
 };
 
-window.resumeDeviceTimer = function(index) {
+window.resumeDeviceTimer = function(index, skipShifting = false) {
     const c = globalConsoles[index];
     if (!c || !c.activeTimer || !c.activeTimer.isPaused) return;
     
@@ -1242,16 +1242,17 @@ window.resumeDeviceTimer = function(index) {
         }
     }
     
-    if (db && c.activeTimer.pausedAt) {
-        const lastOccupied = activeTimerCopy.isOpen ? now : (activeTimerCopy.endTime || now);
-        window.shiftOverlappingBookings(c.name, lastOccupied);
-    }
-
-    // Remove pause properties
+    // Prepare active timer copy
     const activeTimerCopy = { ...c.activeTimer, ...updates };
     delete activeTimerCopy.isPaused;
     delete activeTimerCopy.pausedTimeLeftMs;
     delete activeTimerCopy.pausedElapsedMs;
+
+    if (db && c.activeTimer.pausedAt && !skipShifting) {
+        const lastOccupied = activeTimerCopy.isOpen ? now : (activeTimerCopy.endTime || now);
+        window.shiftOverlappingBookings(c.name, lastOccupied);
+    }
+    
     delete activeTimerCopy.pausedAt;
     
     updateConsoleField(index, {
@@ -1323,7 +1324,7 @@ window.emergencyResumeAll = function() {
     let resumedCount = 0;
     globalConsoles.forEach((c, index) => {
         if (c && c.activeTimer && c.activeTimer.isPaused) {
-            window.resumeDeviceTimer(index);
+            window.resumeDeviceTimer(index, true);
             resumedCount++;
         }
     });
