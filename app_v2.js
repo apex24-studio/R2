@@ -423,6 +423,24 @@ function updateTimeSlotsDropdown() {
         }
     });
 
+    // Add active timer end times as available slots (e.g. if timer extended to 11:35, add 11:35 as a slot)
+    globalConsoles.forEach(c => {
+        if (!c || c.type !== deviceType || c.location !== roomType) return;
+        if (specificDevice && specificDevice !== 'any' && c.name !== specificDevice) return;
+        if (c.activeTimer) {
+            let timerEnd;
+            if (c.activeTimer.isOpen) return; // open session has no defined end
+            if (c.activeTimer.isPaused) {
+                timerEnd = Date.now() + (c.activeTimer.pausedTimeLeftMs || 0);
+            } else {
+                timerEnd = c.activeTimer.endTime;
+            }
+            if (timerEnd && timerEnd > Date.now()) {
+                slotTimesSet.add(timerEnd);
+            }
+        }
+    });
+
     // Sort the times
     const sortedSlotTimes = Array.from(slotTimesSet).sort((a, b) => a - b);
 
