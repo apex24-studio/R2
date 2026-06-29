@@ -118,15 +118,46 @@ function saveDailyTotalsFromBookings(bookings) {
 }
 
 function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roomType) {
-    const duration = durationRaw === 'open' ? 24 : durationRaw;
+    const duration = durationRaw === 'open' ? 24 : parseFloat(durationRaw) || 1;
     const start = startTime;
     const end = startTime + duration * 3600 * 1000;
     
+    const dbRoomName = roomType;
+    const matchingDevices = globalConsoles.filter(c => c && c.type === deviceType && c.location === dbRoomName);
+    const totalDevicesCount = matchingDevices.length;
+    
+    if (totalDevicesCount === 0) return false;
+
+    let activeTimerConflicts = 0;
+    let specificDeviceHasActiveConflict = false;
+
+    matchingDevices.forEach(c => {
+        if (c.activeTimer) {
+            let devStart = c.activeTimer.startTime || Date.now();
+            let devEnd;
+            if (c.activeTimer.isOpen) {
+                devEnd = devStart + 24 * 3600 * 1000;
+            } else if (c.activeTimer.isPaused) {
+                devEnd = Date.now() + (c.activeTimer.pausedTimeLeftMs || 0);
+            } else {
+                devEnd = c.activeTimer.endTime;
+            }
+            if (start < devEnd && end > devStart) {
+                activeTimerConflicts++;
+                if (specificDevice && specificDevice !== 'any' && c.name === specificDevice) {
+                    specificDeviceHasActiveConflict = true;
+                }
+            }
+        }
+    });
+
+    if (specificDeviceHasActiveConflict) return false;
+
     const overlappingBookings = globalBookings.filter(b => {
-        if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
+        if (b.status !== 'approved') return false;
         
-        const bStart = b.actualStartTime || b.startTime;
-        const bDuration = b.duration === 'open' ? 24 : b.duration;
+        const bStart = b.startTime;
+        const bDuration = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
         const bEnd = bStart + bDuration * 3600 * 1000;
         return (start < bEnd && end > bStart);
     });
@@ -136,11 +167,7 @@ function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roo
         if (conflict) return false;
     }
 
-    const dbRoomName = roomType;
-    const matchingDevices = globalConsoles.filter(c => c && c.type === deviceType && c.location === dbRoomName);
-    const totalDevicesCount = matchingDevices.length;
-    
-    const conflictingOverlapping = overlappingBookings.filter(b => {
+    const conflictingBookings = overlappingBookings.filter(b => {
         if (b.deviceType !== deviceType) return false;
         if (b.specificDevice && b.specificDevice !== 'any') {
             const dev = globalConsoles.find(c => c && c.name === b.specificDevice);
@@ -149,7 +176,7 @@ function isSlotAvailable(startTime, durationRaw, deviceType, specificDevice, roo
         return b.roomType === roomType;
     });
 
-    if (conflictingOverlapping.length >= totalDevicesCount) {
+    if ((activeTimerConflicts + conflictingBookings.length) >= totalDevicesCount) {
         return false;
     }
     
@@ -1374,16 +1401,51 @@ window.emergencyResumeAll = function() {
 
 function checkBookingConflict(booking) {
     const start = booking.actualStartTime || booking.startTime;
-    const bDurationNum = booking.duration === 'open' ? 24 : booking.duration;
+    const bDurationNum = booking.duration === 'open' ? 24 : parseFloat(booking.duration) || 1;
     const end = start + bDurationNum * 3600 * 1000;
     
-    // Filter other bookings that are approved or active in store and overlap with this time
+    const dbRoomName = booking.roomType;
+    const matchingDevices = globalConsoles.filter(c => c && c.type === booking.deviceType && c.location === dbRoomName);
+    const totalDevicesCount = matchingDevices.length;
+    
+    if (totalDevicesCount === 0) return `لا توجد أجهزة مطابقة للمواصفات المطلوبة.`;
+
+    let activeTimerConflicts = 0;
+    let specificDeviceHasActiveConflict = false;
+    let activeConflictName = null;
+
+    matchingDevices.forEach(c => {
+        if (c.activeTimer) {
+            let devStart = c.activeTimer.startTime || Date.now();
+            let devEnd;
+            if (c.activeTimer.isOpen) {
+                devEnd = devStart + 24 * 3600 * 1000;
+            } else if (c.activeTimer.isPaused) {
+                devEnd = Date.now() + (c.activeTimer.pausedTimeLeftMs || 0);
+            } else {
+                devEnd = c.activeTimer.endTime;
+            }
+            if (start < devEnd && end > devStart) {
+                activeTimerConflicts++;
+                if (booking.specificDevice && booking.specificDevice !== 'any' && c.name === booking.specificDevice) {
+                    specificDeviceHasActiveConflict = true;
+                    activeConflictName = c.name;
+                }
+            }
+        }
+    });
+
+    if (specificDeviceHasActiveConflict) {
+        return `تنبيه: الجهاز (${activeConflictName}) مشغول حالياً في هذا الوقت.`;
+    }
+
+    // Filter other bookings that are approved
     const overlappingBookings = globalBookings.filter(b => {
         if (b.id === booking.id) return false;
-        if (b.status !== 'approved' && b.status !== 'active_in_store') return false;
+        if (b.status !== 'approved') return false;
         
         const bStart = b.actualStartTime || b.startTime;
-        const bOverlapDurationNum = b.duration === 'open' ? 24 : b.duration;
+        const bOverlapDurationNum = b.duration === 'open' ? 24 : parseFloat(b.duration) || 1;
         const bEnd = bStart + bOverlapDurationNum * 3600 * 1000;
         return (start < bEnd && end > bStart);
     });
@@ -1396,11 +1458,7 @@ function checkBookingConflict(booking) {
         }
     }
 
-    // 2. Check total capacity for the device type in the chosen room
-    const dbRoomName = booking.roomType;
-    const matchingDevices = globalConsoles.filter(c => c && c.type === booking.deviceType && c.location === dbRoomName);
-    const totalDevicesCount = matchingDevices.length;
-    
+    // 2. Check total capacity
     const conflictingOverlapping = overlappingBookings.filter(b => {
         if (b.deviceType !== booking.deviceType) return false;
         
@@ -1412,9 +1470,9 @@ function checkBookingConflict(booking) {
         return b.roomType === booking.roomType;
     });
 
-    if (conflictingOverlapping.length >= totalDevicesCount) {
+    if ((activeTimerConflicts + conflictingOverlapping.length) >= totalDevicesCount) {
         const roomNameAr = booking.roomType;
-        return `تنبيه: جميع أجهزة ${booking.deviceType} في ${roomNameAr} محجوزة بالفعل في هذا الوقت.`;
+        return `تنبيه: جميع أجهزة ${booking.deviceType} في ${roomNameAr} محجوزة ومشغولة بالفعل في هذا الوقت.`;
     }
 
     return null; // No conflict
