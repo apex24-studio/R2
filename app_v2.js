@@ -10,6 +10,7 @@ let db, auth, storage, ref, onValue, set, get, push, update,
 let globalConsoles = [];
 let globalBookings = [];
 let globalDailyTotals = {};
+let globalEmergencyMode = false;
 
 const PRICES = { PS4: 40, PS5: 60 };
 const PAYMENT_NUMBERS = {
@@ -1257,6 +1258,7 @@ window.emergencyPauseAll = function() {
             pausedCount++;
         }
     });
+    if (db) update(ref(db, 'settings'), { emergencyMode: true });
     if (pausedCount > 0) {
         alert(`تم إيقاف العدادات مؤقتاً لعدد ${pausedCount} جهاز بنجاح!`);
     } else {
@@ -1272,6 +1274,7 @@ window.emergencyResumeAll = function() {
             resumedCount++;
         }
     });
+    if (db) update(ref(db, 'settings'), { emergencyMode: false });
     if (resumedCount > 0) {
         alert(`تم استئناف العدادات لعدد ${resumedCount} جهاز بنجاح!`);
     } else {
@@ -1791,6 +1794,16 @@ window.initApp = function(firebaseServices) {
         }
     });
 
+    // Realtime settings
+    const settingsRef = ref(db, 'settings');
+    onValue(settingsRef, snap => {
+        if (snap.exists()) {
+            globalEmergencyMode = !!snap.val().emergencyMode;
+        } else {
+            globalEmergencyMode = false;
+        }
+    });
+
     // Login form
     const loginForm = document.getElementById('admin-login-form');
     if (loginForm) {
@@ -1840,6 +1853,12 @@ window.initApp = function(firebaseServices) {
 
         bookingForm.addEventListener('submit', async e => {
             e.preventDefault();
+            
+            if (globalEmergencyMode) {
+                alert("عفواً، لا يمكن الحجز حالياً بسبب انقطاع التيار الكهربائي (حالة الطوارئ).");
+                return;
+            }
+
             const submitBtn = bookingForm.querySelector('button[type="submit"]');
             const fb = document.getElementById('booking-feedback');
 
